@@ -102,6 +102,31 @@ describe("URL boundaries", () => {
       "see https://portal.example/a?q=1&quot;password=Synthetic15 now",
       "Synthetic15",
     ],
+    [
+      "a cookie header after a comma",
+      "see https://portal.example/a,cookie=SyntheticTok0123456789 now",
+      "SyntheticTok0123456789",
+    ],
+    [
+      "an authorization header after a semicolon",
+      "see https://portal.example/a;authorization=Bearer synthetic-bearer-0123456789 now",
+      "synthetic-bearer-0123456789",
+    ],
+    [
+      "a proxy authorization header after a pipe",
+      "see https://portal.example/a|Proxy-Authorization=Basic dXNlcjpTeW50aGV0aWMxNg== now",
+      "dXNlcjpTeW50aGV0aWMxNg==",
+    ],
+    [
+      "a set-cookie after a semicolon",
+      "see https://portal.example/a;set-cookie=SyntheticTok0123456789 now",
+      "SyntheticTok0123456789",
+    ],
+    [
+      "a cookie header with a colon after a pipe",
+      "see https://portal.example/a|Cookie: sid=SyntheticTok0123456789 now",
+      "SyntheticTok0123456789",
+    ],
   ])("screens text glued after a URL: %s", (_label, text, secret) => {
     const redacted = redactDiagnosticText(text);
     expect(redacted).not.toContain(secret);
@@ -173,6 +198,8 @@ describe("URL boundaries", () => {
     ["a schemeless host", "www.shop.example/a?ids=4,5"],
     ["an escaped apostrophe", "https://wiki.example/wiki/Ender&#39;s_Game"],
     ["an escaped apostrophe in hex", "https://wiki.example/wiki/Ender&#x27;s_Game"],
+    ["a cookie word in the path", "https://shop.example/a,cookies/b"],
+    ["an authorization word in the query", "https://docs.example/a?topic=auth,authorization-code"],
   ])("keeps a real URL whole: %s", (_label, url) => {
     const text = `failed at ${url}. Retry later`;
     expect(spanTexts(text)).toEqual([url]);

@@ -1,5 +1,6 @@
 import {
   awsAccessKeyIdPattern,
+  credentialPolicy,
   isCredentialAssignmentKey,
   isFreeTextSchemeCredential,
   isProviderKey,
@@ -22,7 +23,8 @@ import {
  * - a character reference to a quote or an angle bracket, such as `&lt;`, `&quot;` or `&#x22;`,
  *   or one escaped again for markup, such as `&amp;lt;`: what it stands for ends a URL;
  * - a `,`, `;` or `|` whose next field starts with a credential: a credential-named `key=` or
- *   `key:` (`,password=…`), a bearer or basic credential, an AWS access key ID, a provider API key
+ *   `key:` (`,password=…`), a credential header's `name=` or `name:` (`;authorization=…`,
+ *   `|Cookie: …`), a bearer or basic credential, an AWS access key ID, a provider API key
  *   or a JSON Web Token, in the path, query or fragment alike. A `;` that closes any other
  *   character reference, such as `&amp;`, `&nbsp;` or the chained `&amp;amp;`, is no delimiter.
  *
@@ -115,10 +117,19 @@ const startsCredential = (field: string) => {
   return providerKey !== undefined && isProviderKey(providerKey);
 };
 
+/**
+ * A request credential header's name (`Authorization`, `Proxy-Authorization`, `Cookie`,
+ * `Set-Cookie`), which diagnostic redaction screens as `name=…` or `name: …` outside a URL.
+ */
+const credentialHeaders: ReadonlySet<string> = new Set(credentialPolicy.jsonHeaderFields);
+const isCredentialHeader = (key: string) => credentialHeaders.has(key.toLowerCase());
+
 /** What follows the delimiter at `index` is a credential, not more of the URL. */
 const startsCredentialField = (text: string, index: number) => {
   const { field, key } = fieldAfter(text, index);
-  return (key !== undefined && isCredentialAssignmentKey(key)) || startsCredential(field);
+  const credentialKey =
+    key !== undefined && (isCredentialAssignmentKey(key) || isCredentialHeader(key));
+  return credentialKey || startsCredential(field);
 };
 
 /** A URL scan's state: open bracket counts and the trim floor. */

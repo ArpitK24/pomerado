@@ -796,6 +796,9 @@
 
 ### Fixes
 
+- `redactDiagnosticText` now screens an `Authorization`, `Proxy-Authorization`, `Cookie` or `Set-Cookie` field glued to a URL by `,`, `;` or `|`, such as `https://portal.example/a;authorization=Bearer …` or `https://portal.example/a|Cookie: sid=…`. `urlSpans` from `pomerado/core/privacy/url-spans` ended a URL early only before a credential-named key or a credential shape, so these header fields counted as part of the URL, which redaction leaves byte-exact, and their values stayed readable, while the same field after a space was masked. A URL now also ends at a `,`, `;` or `|` whose next field starts with one of these header names and `=` or `:`, case-insensitively, as it does before `,password=`. A URL whose path or query only holds such a word, as in `/a,cookies/b`, is unchanged.
+  - `pomerado.hostProtocol` stays 1, and no exported type changes.
+
 - A sign-in or card-fill step's inspection, and each call of its fill, skips a frame the page takes away while the call searches the page's frames for the step's controls, such as an ad slot or a widget that reloads itself, and reads the rest. The search read each frame with no regard for one going away, so Playwright's `Frame was detached` failed the whole call: the inspection came back `page_unavailable` even when the step's fields showed in the page itself, and a fill call failed the same way. Now a frame whose read fails once it is detached counts for nothing, along with any match the search read in it before, so a field only in that frame is `not_found`, as when the page has not drawn it yet, and a field in the page is still its one visible match. The inspection's read of the screen's buttons skips such a frame too. A read that fails in a frame still attached fails the call as before.
   - `pomerado.hostProtocol` stays 1, and no exported type changes.
 
