@@ -444,7 +444,13 @@ export const makePlaywrightExecutor = (
     const keyboard: CredentialKeyboard = {
       insertText: (target, text, options) =>
         call(
-          { kind: "credential", target, text, ...(options?.phone === true ? { phone: true } : {}) },
+          {
+            kind: "credential",
+            target,
+            text,
+            ...(options?.phone === true ? { phone: true } : {}),
+            ...(options?.keys === true ? { keys: true } : {}),
+          },
           15,
         ).pipe(
           Effect.flatMap((value) => Schema.decodeUnknown(CredentialReadBack)(value)),

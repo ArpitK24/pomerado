@@ -138,6 +138,7 @@ it("types a credential in the bound field's main world with four DevTools comman
     { value: "data-binding" },
     { value: "https://member.example.com" },
     { value: "s3cret" },
+    { value: false },
   ]);
 });
 

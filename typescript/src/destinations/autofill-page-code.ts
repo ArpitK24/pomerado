@@ -139,12 +139,11 @@ return {
  *   as judged, and how each field's secret is found by value, if it is one), reads the page's
  *   alert text when the host counts new alerts (`alertsBefore`), clicks the submit (or, for a step
  *   with a submit key, presses that key in its last field, which stands as the submit), or presses
- *   Enter on the submit itself once focus landed on it, when another element caught the click or
- *   the step says to (`submitVia`), waits for the page to settle and reads its controls
- *   (`pageControlsCode`), with how many of
- *   their alerts did not show before the click (`newAlerts`) when it read them. A disabled submit it
- *   never clicks: it says so and does nothing, and the host calls again while the page may still
- *   enable it.
+ *   Enter on the submit itself once focus landed on it, when another element caught a click the
+ *   host may press past (`pressCovered`) or the step says to (`submitVia`), waits for the page to
+ *   settle and reads its controls (`pageControlsCode`), with how many of their alerts did not show
+ *   before the click (`newAlerts`) when it read them. A disabled submit it never clicks: it says so
+ *   and does nothing, and the host calls again while the page may still enable it.
  */
 export type AutofillFillCall =
   | {
@@ -205,6 +204,12 @@ export type AutofillFillCall =
        * answer counts the new ones after it (`newAlerts`); a read that runs out counts nothing.
        */
       readonly alertsBefore?: true;
+      /**
+       * When another element catches the click, press the submit from the keyboard instead, once
+       * focus lands on it: only on the host's click again of a `blocked` screen. Without it, such a
+       * click is `blocked`, so a covering notice is dismissed first.
+       */
+      readonly pressCovered?: true;
     };
 
 /** How long the read of the page's alerts before a submit's click may hold the click back. */
@@ -810,9 +815,11 @@ try {
       ? await submit.locator.evaluate(${coveringCode}, undefined, { timeout: ${elementReadMs} }).catch(() => null)
       : null;
     if (blockedBy === null) return unwatched({ submit: "failed", url: primary.url() });
-    // The covered submit is pressed from the keyboard instead; the element over it is never clicked.
+    // On a click again, the covered submit is pressed from the keyboard instead; the element over
+    // it is never clicked. Any other call reports it blocked, so a covering notice is dismissed first.
     try {
-      if (!(await pressSubmit())) return unwatched({ submit: "blocked", blockedBy, url: primary.url() });
+      if (!${JSON.stringify(call.pressCovered === true)} || !(await pressSubmit()))
+        return unwatched({ submit: "blocked", blockedBy, url: primary.url() });
     } catch {
       if (!requested) return unwatched({ submit: "failed", url: primary.url() });
       late = true;

@@ -29,10 +29,6 @@ const pageEvents = `const note = (event) => {
   if (!events.includes(event)) sessionStorage.setItem("events", JSON.stringify([...events, event]));
 };
 document.addEventListener("input", () => note("typed"));
-// While a notice shows, it keeps the focus off the submit under it, so the host can't press it.
-document.getElementById("sign-in").addEventListener("focus", (event) => {
-  if (document.getElementById("consent")) event.target.blur();
-});
 document.addEventListener("click", (event) => {
   if (event.target.id !== "consent-accept") return;
   document.getElementById("consent").remove();

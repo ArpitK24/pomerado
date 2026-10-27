@@ -380,7 +380,7 @@ const credential = (
       return yield* keyboard.insertText(
         request.target,
         request.text,
-        request.phone === true ? { phone: true } : undefined,
+        { phone: request.phone, keys: request.keys },
       );
     }).pipe(
       Effect.ensuring(
