@@ -131,7 +131,11 @@ No case needs to show a changed list: a build can't make the site's list change,
 API responses, or 10 steps, within `remainingMs()`; when a bound stops it, it returns what it
 read with a position that continues; a call the run's time stopped before it read past its
 position hands back that same position, which a call with more time continues, and a second such
-call in a row ends the list with `no_progress`. `next_cursor` is null, with `has_more` true and
+call in a row ends the list with `no_progress`. A later call whose site shows no results and a
+total of 0 after earlier calls returned rows is never the list's end either: `readList` hands back
+that same position once, with a `reason` that says the search likely did not load; prefer returning
+that `reason` as the result's own, and calling a list complete only when `has_more` is false.
+`next_cursor` is null, with `has_more` true and
 `next_cursor_unavailable` saying why, past the deepest position a tool can rebuild without the
 site's link or token (10 site pages or 20 steps, `depth_cap`), when the site's link or token is
 too long for a cursor (`position_too_long`), or when a later call returned no rows and its next
