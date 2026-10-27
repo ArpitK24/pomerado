@@ -795,10 +795,13 @@ const afterFieldCall = (
  * fails that field, and one refused before the click, or a submission refused as it fires, refuses
  * the submit. That click ran, though, so the report says so (`clicked`): the page's own handlers
  * ran on it, and what the step filled may have gone out. A submit the page keeps disabled is never
- * clicked: the host waits for the page to enable it once the fields are filled, and when it stays
- * disabled the report says so (`stayed_disabled`). A step whose code the host typed one character
- * per box into several code fields is submitted only once every box holds exactly one character;
- * otherwise that box fails and the submit is not attempted. A phone field is read back once typed
+ * clicked: the host waits for the page to enable it once the fields are filled. When it stays
+ * disabled after the host typed a field, the host types every field again key by key
+ * (`InsertionOptions.keys`), for a page that enables it only on key presses, and waits once more.
+ * When it still stays disabled the report says so (`stayed_disabled`). A step whose code the host
+ * typed one character per box into several code fields is submitted only once every box holds
+ * exactly one character; otherwise that box fails and the submit is not attempted. A phone field
+ * is read back once typed
  * (`InsertionOptions.phone`): one that kept other digits than the number, as under a country picker
  * set to another country, is `changed`, and the fill types nothing more and never clicks the
  * submit. On a step with fields and no submit, a
@@ -858,19 +861,28 @@ export const fillAutofillStep = (input: FillInput): Effect.Effect<AutofillStepRe
     const boxes = codeBoxes(step, input.values);
     const typed =
       input.typedBefore === undefined ? undefined : [...input.typedBefore, ...input.values];
+    const typeAgain = (fill: FillInput) =>
+      Effect.gen(function* () {
+        progress.statuses.length = 0;
+        progress.check = [];
+        for (let index = 0; index < step.fields.length; index++) {
+          const ended = yield* fillField(fill, progress, index);
+          if (ended !== undefined) return ended;
+        }
+        return yield* submitStep(fill, progress, boxes, typed);
+      });
     const report = yield* submitStep(input, progress, boxes, typed);
+    // The page may enable its submit only on key presses: the host types every field again by keys.
+    if (
+      report.outcome === "filled" &&
+      report.submit === "stayed_disabled" &&
+      typedFields(step, progress).length > 0
+    )
+      return yield* typeAgain({ ...input, keyboard: byKeys(input.keyboard) });
     if (!isBlocked(report) || step.dismiss === undefined) return report;
     const again = yield* dismissNotice(input, progress);
-    if (again.emptied) {
-      // The dismiss emptied the fields before its click: the host types them all again.
-      progress.statuses.length = 0;
-      progress.check = [];
-      for (let index = 0; index < step.fields.length; index++) {
-        const ended = yield* fillField(input, progress, index);
-        if (ended !== undefined) return ended;
-      }
-      return yield* submitStep(input, progress, boxes, typed);
-    }
+    // The dismiss emptied the fields before its click: the host types them all again.
+    if (again.emptied) return yield* typeAgain(input);
     if (!again.dismissed) return report;
     progress.check = typedFields(step, progress);
     return yield* submitStep(input, progress, boxes, typed);
@@ -909,6 +921,11 @@ export const resubmitAutofillStep = (input: CallInput): Effect.Effect<AutofillSt
     const codeFields = step.fields.flatMap((field, index) => (field.slot === "code" ? [index] : []));
     return yield* submitStep(input, progress, codeFields.length > 1 ? codeFields : [], undefined);
   });
+
+/** The keyboard, typing each value key by key (`InsertionOptions.keys`). */
+const byKeys = (keyboard: CredentialKeyboard): CredentialKeyboard => ({
+  insertText: (target, text, options) => keyboard.insertText(target, text, { ...options, keys: true }),
+});
 
 /** The first of the step's selectors that reaches into another frame, its `dismiss` included. */
 const crossingSelector = (step: AutofillStep<FillSlot>) =>

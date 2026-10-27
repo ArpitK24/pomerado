@@ -767,6 +767,42 @@ const fillCode = async (page: Page, code: string, onclick: string, action = "/se
   return { report, received, requested };
 };
 
+// A page that enables its submit only on key presses, never on the host's native insertion, gets
+// the code typed again key by key, then clicked once.
+test("a code screen whose submit only a keyup enables is typed again key by key and sent once", async ({
+  page,
+}) => {
+  const code = "246810";
+  const received = await serve(
+    page,
+    `<label>Code<input id="code" name="code" inputmode="numeric"></label>
+<button id="continue" disabled>Verify</button>
+<script>document.getElementById('code').addEventListener('keyup', ({ target }) => { document.getElementById('continue').disabled = !/^[0-9]{6}$/.test(target.value); });</script>`,
+    false,
+  );
+  const inspection = await inspect(page, codeStep);
+  if ("outcome" in inspection) throw new Error(`Inspection refused: ${inspection.reason}`);
+  const host = await hostPage(page);
+  const report = await Effect.runPromise(
+    fillAutofillStep({
+      step: codeStep,
+      values: [code],
+      inspection,
+      page: host,
+      keyboard: (await hostKeyboard(page)).keyboard,
+      settleMs: 500,
+    }),
+  );
+  expect(report).toMatchObject({
+    outcome: "filled",
+    fields: [{ slot: "code", status: "filled" }],
+    submit: "clicked",
+  });
+  expect(received.map((form) => Object.fromEntries(form))).toEqual([{ code }]);
+  expect(JSON.stringify(report)).not.toContain(code);
+  expectNotCarried(host.calls, code);
+});
+
 // A code adjoined by digits is not found, since a short one turns up inside a timestamp by chance,
 // and one the site's own address held before typing is no leak.
 for (const [chance, code, onclick, action] of [
