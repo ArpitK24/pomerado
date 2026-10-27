@@ -66,17 +66,21 @@ export type GuardianRefusal = typeof GuardianRefusal.Type;
 /**
  * A host fact an execution refusal may rest on, which the host checks against its own record:
  * `retry_permission`, that the step may not run again; `committed_write`, that the step would
- * commit a listed write again; `write_authority`, that the step's own authority grants no write.
- * A refusal whose ground the host's record contradicts, retry permission when
- * trusted_execution_context.repeatableRead is true, a committed write for a step the review labels
- * a read, or missing write authority for a step the host gives write authority, is sent back once
- * in the same review and is never final. An older reviewer never names `write_authority`, so its
- * refusals stand as before.
+ * commit a listed write again; `write_authority`, that the step's own authority grants no write;
+ * `owner_confirmation`, that the step needs the owner's confirmation, which the agent asks for
+ * with a confirm question that names this review. A refusal whose ground the host's record
+ * contradicts, retry permission when trusted_execution_context.repeatableRead is true, a
+ * committed write for a step the review labels a read, missing write authority for a step the
+ * host gives write authority, or missing confirmation for the very step the owner confirmed
+ * (`trusted_authority.ownerConfirmedStep`), is sent back once in the same review and is never
+ * final. An older reviewer never names `write_authority` or `owner_confirmation`, so its refusals
+ * stand as before.
  */
 export const guardianRefusalGrounds = [
   "retry_permission",
   "committed_write",
   "write_authority",
+  "owner_confirmation",
 ] as const;
 export type GuardianRefusalGround = (typeof guardianRefusalGrounds)[number];
 

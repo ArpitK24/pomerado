@@ -75,6 +75,18 @@ export interface PendingQuestion {
    * once, for real, before it publishes. Its allowedEffects stays empty on purpose.
    */
   readonly buildEffect?: "read" | "write";
+  /**
+   * Host fact: the agent's confirm questions that ask the owner to confirm a step an execution
+   * review held for that confirmation (`refusalGround` `owner_confirmation`), each with the id of
+   * that review. Guardian binds the owner's yes to exactly that step.
+   */
+  readonly confirms?: readonly ConfirmedStepQuestion[];
+}
+
+/** A confirm question that asks the owner to confirm the step execution review `reviewId` held. */
+export interface ConfirmedStepQuestion {
+  readonly questionId: string;
+  readonly reviewId: string;
 }
 
 const reviewedOption = <E>(
@@ -106,6 +118,7 @@ export const questionForReview = <E>(
     readonly decisionLedger?: DecisionLedger;
     readonly scriptAsk?: true;
     readonly buildEffect?: "read" | "write";
+    readonly confirms?: readonly ConfirmedStepQuestion[];
   },
   screen: (text: string) => Effect.Effect<string, E>,
 ): Effect.Effect<PendingQuestion, E> =>
@@ -169,6 +182,12 @@ export const questionForReview = <E>(
       ...(facts.decisionLedger === undefined ? {} : { decisionLedger: facts.decisionLedger }),
       ...(facts.scriptAsk === true ? { scriptAsk: true as const } : {}),
       ...(facts.buildEffect === undefined ? {} : { buildEffect: facts.buildEffect }),
+      // Question ids and review ids are the host's keys, never caller text: nothing to screen.
+      ...(facts.confirms === undefined || facts.confirms.length === 0
+        ? {}
+        : {
+            confirms: facts.confirms.map(({ questionId, reviewId }) => ({ questionId, reviewId })),
+          }),
     };
   });
 

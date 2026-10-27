@@ -61,7 +61,11 @@ import { SupportedOperationVariant } from "../registry/operation-variants.js";
 import type { RegistryIssue } from "../registry/issues.js";
 import type { ExecutionBoundaryError } from "../execution/boundary.js";
 import type { SignInDiagnostic } from "../execution/sign-in-diagnostics.js";
-import { AnsweredQuestion, type QuestionDecision } from "../guardian/question.js";
+import {
+  AnsweredQuestion,
+  type ConfirmedStepQuestion,
+  type QuestionDecision,
+} from "../guardian/question.js";
 import { MintFile } from "./file-handles.js";
 import {
   TaskChange,
@@ -1694,12 +1698,15 @@ export interface BuildAssumption {
 /**
  * A confirm question as the minting agent proposes it. `endsBuild` marks one that asks whether to
  * end the build: its yes is the owner's choice to end it (`owner_ended`), and its no means keep
- * going, never a declined step (`owner_declined`). The host keeps the mark to itself, so the request
- * Guardian and the caller read is a plain confirm.
+ * going, never a declined step (`owner_declined`). `confirmsReview` marks one that asks the owner
+ * to confirm the step an execution review refused for want of that confirmation, by that review's
+ * `reviewId`: the review of the question is told, and the owner's yes then authorizes exactly that
+ * step. The host keeps both marks to itself, so the request the caller reads is a plain confirm.
  */
 export const ProposedConfirmQuestion = Schema.Struct({
   ...ConfirmQuestion.fields,
   endsBuild: Schema.optional(Schema.Boolean),
+  confirmsReview: Schema.optional(Schema.String.pipe(Schema.minLength(1), Schema.maxLength(200))),
 });
 
 /**
@@ -2601,6 +2608,13 @@ export interface MintDependencies {
        * does the task once, for real, before it publishes; an older host leaves it out.
        */
       readonly buildEffect?: "read" | "write";
+      /**
+       * The agent's confirm questions that ask the owner to confirm a step an execution review of
+       * this build refused (`confirmsReview`), each with that review's id. A host that forwards it
+       * to `questionForReview` lets Guardian bind the owner's yes to exactly that step; an older
+       * host leaves it out, and the answer reaches later reviews only as an answered question.
+       */
+      readonly confirms?: readonly ConfirmedStepQuestion[];
     },
   ) => Effect.Effect<QuestionDecision & { readonly reviewId?: string }, MintFailure>;
   /**

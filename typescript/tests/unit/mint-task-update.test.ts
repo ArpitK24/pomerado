@@ -227,12 +227,12 @@ it("gives a write build's update review the write effect before its first act st
   expect(updates.reviews[0]?.update.effect).toBe("write");
   expect(updates.reviews[0]?.current).toMatchObject({ revision: 0, effect: "write" });
   expect(updates.applied[0]?.next).toMatchObject({ revision: 1, effect: "write" });
-  // The minter reads the same exception: a confirmed answer can overturn a decision that held a
-  // step to the caller's own request, never one made for safety or a scope limit.
+  // The minter reads the same rule: a confirmed answer settles a decision that held a step for
+  // the caller's input, authority or confirmation, never one made because a step weakens security.
   const mintUpdate = f.requests[0]?.tools.find((tool) => tool.name === "mint_update");
   expect(JSON.stringify(mintUpdate ?? null)).toContain(
     JSON.stringify(
-      "No update removes the requested action itself, allows repeating a write that may have committed, or overturns a Guardian decision, except that the caller's confirmed answer can overturn one that held a step to their own request, such as a time, a value or a search setting. A caller's answer never overturns a decision made for safety or for a Pomerado scope limit.",
+      "No update removes the requested action itself or allows repeating a write that may have committed. The caller's confirmed answer settles a Guardian decision that held a step for their input, authority or confirmation, a scope decision included, but never one made because a step weakens security or safety.",
     ).slice(1, -1),
   );
 });

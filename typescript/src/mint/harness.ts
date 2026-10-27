@@ -326,6 +326,16 @@ const callerVisibleRequest = <R extends typeof AgentRequest.Type>(
   ...(request.notice === undefined ? {} : { notice: redact(request.notice) }),
   questions: request.questions.map((question) => callerVisibleQuestion(question, redact)),
 });
+/**
+ * The agent's confirm questions that ask the owner to confirm a step an execution review refused
+ * (`confirmsReview`), each with that review's id.
+ */
+const confirmsReviewMarks = (request: typeof AgentRequest.Type) =>
+  request.questions.flatMap((question) =>
+    question.type === "confirm" && question.confirmsReview !== undefined
+      ? [{ questionId: question.id, reviewId: question.confirmsReview }]
+      : [],
+  );
 /** The ids of the agent's confirm questions that ask whether to end the build (`endsBuild`). */
 const endsBuildIds = (request: typeof AgentRequest.Type): ReadonlySet<string> =>
   new Set(
@@ -1109,6 +1119,11 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
       const answeredQuestions = new Map<string, AnsweredQuestion>(
         (recovered?.answeredQuestions ?? []).map(({ id, answer }) => [id, answer]),
       );
+      /**
+       * The review each confirm question the minter marked with `confirmsReview` named, by the
+       * question's id, once asked: an id names one review, so an answer under it binds to that one.
+       */
+      const confirmAsks = new Map<string, string>();
       /**
        * Whether the owner's latest request_input kept an answer Guardian reads, with no other call
        * through the turn's actions since: what `owner_ended` stands on. A secret or sign-in answer
@@ -6517,14 +6532,43 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                     "Remove allowOther and allowNote from every question and ask again: the host lets the caller answer every choice and multi_choice in their own words.",
                 });
               const decoded = yield* decode(AgentRequest, input);
-              // The mark stays the host's own: Guardian and the caller read a plain confirm.
+              // The marks stay the host's own: the caller reads a plain confirm, and Guardian is
+              // told which held step a confirm question asks about.
               const endsBuild = endsBuildIds(decoded);
+              const confirms = confirmsReviewMarks(decoded);
+              const unheld = confirms.filter(
+                ({ reviewId }) =>
+                  !ledgerDenials.some(
+                    (denial) => denial.review === "execution" && denial.reviewId === reviewId,
+                  ),
+              );
+              if (unheld.length > 0 && !ledgerPartial)
+                return JSON.stringify({
+                  status: "question_refused",
+                  reason: "confirms_unknown_review",
+                  userInputRequired: false,
+                  instruction: `confirmsReview names the reviewId of an execution step Guardian refused in this build, and ${unheld.map(({ reviewId }) => reviewId).join(", ")} is none. Set it to the reviewId from that step's review_rejected result, or leave it out, and ask again.`,
+                });
+              // A yes binds to the one review its question named: an id the owner already answered,
+              // or one asked for another review, would let an earlier answer stand for this ask.
+              const reused = confirms.filter(
+                ({ questionId, reviewId }) =>
+                  answeredQuestions.has(questionId) ||
+                  (confirmAsks.get(questionId) ?? reviewId) !== reviewId,
+              );
+              if (reused.length > 0)
+                return JSON.stringify({
+                  status: "question_refused",
+                  reason: "confirms_question_reused",
+                  userInputRequired: false,
+                  instruction: `A confirm question with confirmsReview needs an id of its own: ${reused.map(({ questionId }) => questionId).join(", ")} already holds an answer or asked about another refusal. Give it a new id and ask again.`,
+                });
               const proposed = callerVisibleRequest(
                 {
                   ...decoded,
                   questions: decoded.questions.map((question) => {
                     if (question.type !== "confirm") return question;
-                    const { endsBuild: _mark, ...asked } = question;
+                    const { endsBuild: _mark, confirmsReview: _confirms, ...asked } = question;
                     return asked;
                   }),
                 },
@@ -6566,6 +6610,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                   requestId,
                   ...(yield* publicationRefusals),
                   ...decidedBuildEffect(),
+                  ...(confirms.length === 0 ? {} : { confirms }),
                 });
                 yield* reviewCompleted;
                 reviewId = review.reviewId;
@@ -6660,6 +6705,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                       : "Reword the question using the rationale, or withdraw it and continue. Do not ask again for a value you were already given or that the site shows. A reworded question is reviewed again.",
                   });
               }
+              for (const { questionId, reviewId } of confirms) confirmAsks.set(questionId, reviewId);
               askingId = requestId;
               askingEndsBuild = endsBuild.size > 0;
               handedBackQuestion = undefined;
