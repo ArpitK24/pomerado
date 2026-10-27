@@ -25,6 +25,11 @@ import { pageControlsCode } from "./page-controls.js";
  *   When the step's boxes found so disagree on how many there are, or two take one place, as boxes
  *   split between two containers do, none of them is a box.
  * A field that is no box, or a screen with fewer than two, has none. Attributes only, never a value.
+ * When the step names one code field and it is the first box of such a row by its `maxlength`, as
+ * a code screen the recipe never recorded may show, `codeBoxRow` names each other box of that same
+ * row, in order, by a selector that matches it alone in its document or shadow root: its id, else
+ * its name, else its `aria-label`. A row with a box none of those name alone, or with more than
+ * `maximumCodeBoxes` boxes, has none.
  */
 const codeBoxesCode = `const codeBoxes = [];
 const codeFields = codeSlots.filter(Boolean).length;
@@ -50,10 +55,24 @@ for (const [index, field] of fields.entries()) {
       const at = boxes.indexOf(element);
       return boxes.length < 2 || at < 0 ? null : { box: at + 1, of: boxes.length, limit };
     };
+    const nameOf = (control) => {
+      const root = control.getRootNode();
+      for (const attribute of ["id", "name", "aria-label"]) {
+        const value = control.getAttribute(attribute);
+        if (!value) continue;
+        const selector = "input[" + attribute + '="' + CSS.escape(value) + '"]';
+        const matches = root.querySelectorAll(selector);
+        if (matches.length === 1 && matches[0] === control) return selector;
+      }
+      return null;
+    };
     if (!editable(element)) return null;
     if (element.maxLength === 1) {
       const screen = element.form ?? element.getRootNode();
-      return place(Array.from(screen.querySelectorAll("input")).filter((control) => editable(control) && control.maxLength === 1), "maxlength");
+      const boxes = Array.from(screen.querySelectorAll("input")).filter((control) => editable(control) && control.maxLength === 1);
+      const found = place(boxes, "maxlength");
+      if (found === null || codeFields !== 1 || found.box !== 1 || boxes.length > mostBoxes) return found;
+      return { ...found, rest: boxes.slice(1).map(nameOf) };
     }
     if (element.maxLength >= 0 || codeFields < 2 || element.parentNode === null) return null;
     let boxes = Array.from(element.parentNode.children).filter(editable);
@@ -71,6 +90,8 @@ for (const [index, field] of fields.entries()) {
   }, [codeFields, ${maximumCodeBoxes}], { timeout: ${elementReadMs} }).catch(() => null);
   codeBoxes.push(codeBox);
 }
+const rowRest = codeBoxes.find((codeBox) => codeBox?.rest !== undefined)?.rest;
+const codeBoxRow = rowRest === undefined || rowRest.includes(null) ? undefined : rowRest;
 const scriptBoxes = codeBoxes.filter((codeBox) => codeBox?.limit === "script");
 const scriptAgree =
   new Set(scriptBoxes.map(({ box }) => box)).size === scriptBoxes.length &&
@@ -118,6 +139,7 @@ return {
   buttons,
   ...(submitKey === null || submit === null ? {} : { keySubmit: { submitControls: submit.submitControls } }),
   ...(popupTargetId === undefined ? {} : { popupTargetId }),
+  ...(codeBoxRow === undefined ? {} : { codeBoxRow }),
   url: primary.url(),
   document: await documentStart(),
 };`;

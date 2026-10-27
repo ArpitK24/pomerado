@@ -336,6 +336,8 @@ const Located = Schema.Union(
     /** A step's submit key: how many submit controls its last field's form shows. */
     keySubmit: Schema.optional(Schema.Struct({ submitControls: Schema.Number })),
     popupTargetId: Schema.optional(Schema.String),
+    /** The other boxes of the row the step's one code field begins (`codeBoxRow`). */
+    codeBoxRow: Schema.optional(Schema.Array(Schema.String)),
     url: Schema.String,
     /** When the primary page's document began loading (`performance.timeOrigin`). */
     document: Schema.optional(Schema.Number),
@@ -417,6 +419,13 @@ export interface AutofillInspection {
    * also in `authenticationOrigins`, so each fill call trusts it too.
    */
   readonly carriedSignInOrigin?: string | undefined;
+  /**
+   * Host-only: when the step names one code field and it is the first of a row of one-character
+   * boxes that each take one by their `maxlength`, a selector for each other box of that row, in
+   * order, that matches it alone, read from its id, name or `aria-label`; absent when one has none.
+   * Read at run time for a code screen the recipe never recorded, never a recipe value.
+   */
+  readonly codeBoxRow?: readonly string[] | undefined;
   readonly screen: {
     /**
      * The origin of the frame the host found the step's controls in, its submit's or, when it
@@ -939,6 +948,7 @@ export const inspectAutofillStep = (input: {
       ...(predicate === undefined ? {} : { trustSignInUrl: predicate }),
       ...(trustedByHost.size === 0 ? {} : { trustedSignInOrigins: [...trustedByHost].sort() }),
       ...(carried === undefined ? {} : { carriedSignInOrigin: carried }),
+      ...(found.codeBoxRow === undefined ? {} : { codeBoxRow: found.codeBoxRow }),
       ...(input.paymentFrameOrigins === undefined
         ? {}
         : { paymentFrameOrigins: input.paymentFrameOrigins }),
