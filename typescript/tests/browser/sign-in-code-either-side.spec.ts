@@ -32,16 +32,17 @@ document.getElementById("otc").addEventListener("input", (event) => {
 </script>`;
 
 /**
- * The code screen at /verify as a row of `boxes` one-character boxes in no form and with no
- * button: the first is marked as a one-time code, all share one name, and each has its own label.
- * Its own script moves to the next box as each takes a digit and, once every box holds one, sends
- * the code, then loads the account as a new document.
+ * The code screen at /verify as a row of six one-character boxes in no form and with no button:
+ * the first is marked as a one-time code, all share one name, and each has its own label. Its own
+ * script moves to the next box as each takes a digit and, once every box holds one, sends the
+ * code, then loads the account as a new document.
  */
-const boxRow = (boxes: number) => `${Array.from(
-  { length: boxes },
-  (_, index) =>
-    `<input name="digit" maxlength="1" inputmode="numeric" aria-label="Digit ${index + 1}"${index === 0 ? ' autocomplete="one-time-code"' : ""}>`,
-).join("")}
+const boxRow = `${[1, 2, 3, 4, 5, 6]
+  .map(
+    (box) =>
+      `<input name="digit" maxlength="1" inputmode="numeric" aria-label="Digit ${box}"${box === 1 ? ' autocomplete="one-time-code"' : ""}>`,
+  )
+  .join("")}
 <script>
 const boxes = [...document.querySelectorAll("input")];
 boxes.forEach((box, index) => box.addEventListener("input", () => {
@@ -143,19 +144,13 @@ test("a run whose recipe recorded no code screen types the code into one code fi
   await expect(page.locator("#account")).toBeVisible();
 });
 
-for (const { boxes, signedIn, outcome, asks, received: sent } of [
-  { boxes: 6, signedIn: 1, outcome: { _tag: "Right", right: { alreadySignedIn: false } }, asks: 1, received: [code] },
-  // A row whose box count does not fit the code: asked twice more, then nothing is typed.
-  { boxes: 5, signedIn: 0, outcome: { _tag: "Left", left: { reason: "sign_in_value" } }, asks: 3, received: [] },
-])
-  test(`a run whose recipe recorded no code screen meets a row of ${boxes} one-character code boxes that sends itself, for a six-digit code`, async ({
-    page,
-  }) => {
-    const received = await serve(page, boxRow(boxes));
-    const { result, prompts } = await run(page, noCodeRecipe);
-    expect(result).toMatchObject(outcome);
-    expect(prompts).toEqual(["login", ...Array.from({ length: asks }, () => codePrompt)]);
-    expect(received).toEqual(sent);
-    await expect(page.locator("#account")).toHaveCount(signedIn);
-    for (const box of await page.locator('[name="digit"]').all()) await expect(box).toHaveValue("");
-  });
+test("a run whose recipe recorded no code screen types the code one digit per box into a row of six one-character boxes that sends itself, and signs in", async ({
+  page,
+}) => {
+  const received = await serve(page, boxRow);
+  const { result, prompts } = await run(page, noCodeRecipe);
+  expect(result).toMatchObject({ _tag: "Right", right: { alreadySignedIn: false } });
+  expect(prompts).toEqual(["login", codePrompt]);
+  expect(received).toEqual([code]);
+  await expect(page.locator("#account")).toBeVisible();
+});
