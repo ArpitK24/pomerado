@@ -23,6 +23,7 @@ import { admitScreen, noteExactSent } from "./autofill-replay-workspace.js";
 import { approvalNumber, approvalScreen, withApprovalNumber } from "./autofill-replay-approval.js";
 import { settleCarried } from "./autofill-replay-fill.js";
 import {
+  codeBoxRow,
   codeScreenOf,
   findCodeScreen,
   onSignInOrigin,
@@ -425,9 +426,10 @@ const retryCode = <E extends YieldableError, V extends string, L extends Autofil
 /**
  * A code screen the recipe never recorded, looked for once and only while no code may have gone
  * out, so the look never sends a second one (`findCodeScreen`, `onSignInOrigin`). A code field in
- * no form with a submit is filled with no submit, so the page's own send counts (`page`). Its code
- * comes as a recorded code screen's does: the host's own, else the owner's answer to the host's
- * question; after it refuses a code, its retries never take the host generator's (see
+ * no form with a submit is filled with no submit, so the page's own send counts (`page`). A field
+ * that is the first of a row of one-character boxes takes the whole row, or nothing (`codeBoxRow`).
+ * Its code comes as a recorded code screen's does: the host's own, else the owner's answer to the
+ * host's question; after it refuses a code, its retries never take the host generator's (see
  * `runReplayStep`). The screen this replay last submitted still showing is the site's
  * answer to it, such as a password screen shown again or a refused recovery code, so a code box on
  * it takes no code. A fill that typed no code leaves the sign-in as it was, its step dropped from
@@ -443,7 +445,8 @@ const unrecordedCode = <E extends YieldableError, V extends string, L extends Au
   Effect.gen(function* () {
     if (probed.current || replay.sent.maySent.has("code")) return "none" as const;
     probed.current = true;
-    const found = yield* findCodeScreen(input.hooks);
+    const field = yield* findCodeScreen(input.hooks);
+    const found = "outcome" in field ? field : yield* codeBoxRow(input.hooks, field);
     if ("outcome" in found || !onSignInOrigin(replay.signInOrigins(), found.inspection))
       return "none" as const;
     if (!(yield* lastScreenGone(input, replay))) return "none" as const;
