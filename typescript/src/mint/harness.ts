@@ -835,9 +835,18 @@ const jsonTypeTree = (value: unknown): JsonTypeTree => {
 const loginDeclinedInstruction = (decline: LoginDecline) =>
   `The owner chose not to sign in: ${decline === "no_account" ? "they have no account on this site" : "they want only what the site shows without signing in"}. This is their answer, not an error. Never ask for a login again and never call execute purpose authenticate in this build. Build the part of the request the site shows without signing in. If that part is missing, or much less than the request asks for, ask the owner with request_input before you build: say that without signing in the site shows only what you found, name it, and offer to continue with that or stop. If they choose to stop, or the build cannot go on without signing in, end with report_blocked reason owner_declined.`;
 
+/**
+ * What a build does once it runs signed out: a read runs its example and live tests, and a write,
+ * as a guest of a site that offers its task without an account, does its write through act steps.
+ */
+const signedOutWork = (effect: "read" | "write" | "ask") =>
+  effect === "write"
+    ? "Do the write through purpose act steps, and publish without signing in, from the part of the request the site offers signed out"
+    : "Explore, run the example and live tests, and publish without signing in, from the part of the request the site shows signed out";
+
 /** What the minter hears about signing in once the build gave it up. */
-const signInAbandonedInstruction =
-  "This build gave up signing in and runs signed out: no sign-in runs and no login is asked for. Never call execute purpose authenticate again. Explore, run the example and live tests, and publish from the part of the request the site shows signed out; when that part is missing or much less than asked, ask the owner with request_input whether to continue with it or stop.";
+const signInAbandonedInstruction = (effect: "read" | "write" | "ask") =>
+  `This build gave up signing in and runs signed out: no sign-in runs and no login is asked for. Never call execute purpose authenticate again. ${signedOutWork(effect)}; when that part is missing or much less than asked, ask the owner with request_input whether to continue with it or stop.`;
 
 /** The answer every authenticate gets once the owner declined to sign in. */
 const loginDeclinedAnswer = (decline: LoginDecline) =>
@@ -3876,7 +3885,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
             : []),
           ...(changes.some((change) => change.setting === "login" && change.change === "signed_out")
             ? [
-                "The task now runs signed out: never call execute purpose authenticate again. Explore, run the example and live tests, and publish without signing in, from the part of the request the site shows signed out.",
+                `The task now runs signed out: never call execute purpose authenticate again. ${signedOutWork(buildEffect)}.`,
               ]
             : []),
           ...(settings.has("effect")
@@ -5159,7 +5168,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                 return JSON.stringify({
                   status: "sign_in_abandoned",
                   userInputRequired: false,
-                  instruction: signInAbandonedInstruction,
+                  instruction: signInAbandonedInstruction(buildEffect),
                 });
               yield* active();
               const submitted = yield* decode(ExecutionRequest, input);
@@ -6437,7 +6446,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                       login: "abandoned",
                       rationale,
                       userInputRequired: false,
-                      instruction: signInAbandonedInstruction,
+                      instruction: signInAbandonedInstruction(buildEffect),
                     });
                   // The owner already declined to sign in: they are not asked again.
                   const login =
@@ -6937,7 +6946,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                     return JSON.stringify({
                       status: "sign_in_abandoned",
                       userInputRequired: false,
-                      instruction: signInAbandonedInstruction,
+                      instruction: signInAbandonedInstruction(buildEffect),
                     });
                   }),
                 ),

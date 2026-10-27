@@ -2083,6 +2083,53 @@ it("drops a failed sign-in once an update makes the task run signed out", async 
   expect(outcome.blocked).toMatchObject({ reason: "site_lacks_capability" });
 });
 
+// A write build that goes on signed out, as a guest of a site that offers its task without an
+// account, still does its write through act steps; a read's example and live tests are no part
+// of it.
+it("points a write build that goes on signed out to its act steps", async () => {
+  const f = await fixture(
+    (_request, index) =>
+      [
+        call(
+          "request_input",
+          {
+            questions: [
+              {
+                id: "guest",
+                type: "confirm",
+                prompt: "Should the tool apply as a new applicant, without signing in?",
+              },
+            ],
+          },
+          "ask",
+        ),
+        call(
+          "mint_update",
+          {
+            summary: "Apply as a new applicant, without signing in.",
+            changes: [{ setting: "login", change: "signed_out" }],
+            confirmedBy: ["guest"],
+            recommend: "update",
+            intent: "The owner confirmed applying signed out.",
+          },
+          "update",
+        ),
+      ][index] ?? prose("Stopping."),
+    {
+      askInput: () => Effect.succeed({ guest: { type: "confirm", value: { confirmed: true } } }),
+      reviewTaskUpdate: () =>
+        Effect.succeed({ outcome: "allow" as const, rationale: "Confirmed.", reviewId: "r1" }),
+      applyTaskUpdate: () => Effect.succeed({ outcome: "applied" as const }),
+    },
+    { effect: "write", siteOrigin: "https://shop.example.test" },
+  );
+  await f.run();
+  const applied = lastResult(f.requests[2]);
+  expect(applied).toContain("runs signed out");
+  expect(applied).toContain("purpose act");
+  expect(applied).not.toContain("live tests");
+});
+
 const harnessFixture = makeMintHarnessFixture(
   cleanups,
   { mode: "mint", intent: "Read public data", businessInput: {}, observations: [] },
