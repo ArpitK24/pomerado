@@ -142,7 +142,8 @@ export interface AutofillStep<Slot extends FillSlot = AutofillSlot> {
   /**
    * `keyboard`: the host presses the submit from the keyboard rather than clicking it first, as a
    * recorded screen whose submit another element covered was sent (a recipe's `submitVia`). Never
-   * the minter's: a fill presses a covered submit from the keyboard by itself.
+   * the minter's: the host's click again of a `blocked` screen presses a covered submit from the
+   * keyboard by itself.
    */
   readonly submitVia?: "keyboard" | undefined;
 }
@@ -336,6 +337,8 @@ const Located = Schema.Union(
     /** A step's submit key: how many submit controls its last field's form shows. */
     keySubmit: Schema.optional(Schema.Struct({ submitControls: Schema.Number })),
     popupTargetId: Schema.optional(Schema.String),
+    /** The other boxes of the row the step's one code field begins (`codeBoxRow`). */
+    codeBoxRow: Schema.optional(Schema.Array(Schema.String)),
     url: Schema.String,
     /** When the primary page's document began loading (`performance.timeOrigin`). */
     document: Schema.optional(Schema.Number),
@@ -417,6 +420,13 @@ export interface AutofillInspection {
    * also in `authenticationOrigins`, so each fill call trusts it too.
    */
   readonly carriedSignInOrigin?: string | undefined;
+  /**
+   * Host-only: when the step names one code field and it is the first of a row of one-character
+   * boxes that each take one by their `maxlength`, a selector for each other box of that row, in
+   * order, that matches it alone, read from its id, name or `aria-label`; absent when one has none.
+   * Read at run time for a code screen the recipe never recorded, never a recipe value.
+   */
+  readonly codeBoxRow?: readonly string[] | undefined;
   readonly screen: {
     /**
      * The origin of the frame the host found the step's controls in, its submit's or, when it
@@ -474,12 +484,13 @@ export type AutofillStepReport =
        * `clicked`: the host clicked the submit, or pressed the step's submit key in its last field,
        * counting a click or press that ran out of time while the next page loaded once a request
        * for the page's main frame went out, as a form's submission sends. With `via: "keyboard"`,
-       * another element caught the click, or the step said to (`submitVia`), and the host pressed
-       * Enter on that same submit instead, once focus landed on it.
+       * another element caught the host's click again of a `blocked` screen, or the step said to
+       * (`submitVia`), and the host pressed Enter on that same submit instead, once focus landed
+       * on it.
        * `failed`: the click or press threw before any such request went out.
        * `blocked`: another element sat over the submit and caught the host's click (`blockedBy`),
-       * and focus would not land on the submit for a press from the keyboard, so nothing was sent;
-       * the fields still hold what was typed.
+       * so nothing was sent; the fields still hold what was typed. A fill reports it so; a click
+       * again does only when focus would not land on the submit for a press from the keyboard.
        * `refused`: after the fill the host refused a control where it then sat or submitted.
        * `stayed_disabled`: the submit stayed disabled after the fields were filled, through the
        * host's wait for the page to enable it, so the host never clicked it.
@@ -939,6 +950,7 @@ export const inspectAutofillStep = (input: {
       ...(predicate === undefined ? {} : { trustSignInUrl: predicate }),
       ...(trustedByHost.size === 0 ? {} : { trustedSignInOrigins: [...trustedByHost].sort() }),
       ...(carried === undefined ? {} : { carriedSignInOrigin: carried }),
+      ...(found.codeBoxRow === undefined ? {} : { codeBoxRow: found.codeBoxRow }),
       ...(input.paymentFrameOrigins === undefined
         ? {}
         : { paymentFrameOrigins: input.paymentFrameOrigins }),

@@ -44,10 +44,6 @@ ${formExtra}</form>
 <script>
 const notice = document.getElementById("cookie-notice");
 if (localStorage.getItem("cookies") === "accepted") notice.style.display = "none";
-// While the notice shows, it keeps the focus off the sign-in under it, so the host can't press it.
-document.getElementById("login").addEventListener("focus", (event) => {
-  if (notice.style.display !== "none") event.target.blur();
-});
 document.getElementById("cookie-accept").addEventListener("click", () => {
   localStorage.setItem("cookies", "accepted");
   notice.style.display = "none";

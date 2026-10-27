@@ -504,6 +504,10 @@ const variantsUnsupported = new MintFailure({
 });
 const hostRefusalPassed =
   "A host check refused a step earlier in this attempt, but a later finish_build got past it, so the build has not ended. Fix the findings the latest refusal names and call finish_build again. Use host_refused only when a host check still refuses a step and nothing left in this attempt can fix it.";
+const hostRefusalNamesStep =
+  "The host's last refusal, refusedReason, names a step that fixes it in its instruction or rationale, so the build has not ended. Prefer doing that step and calling finish_build again; if publication still cannot pass, you may report host_refused again.";
+const hostRefusalRepeated =
+  "Your last finish_build sent again, unchanged, a submission the host refused before a later finish_build got past that refusal to Guardian's review, so it is no new refusal and the build has not ended. Prefer fixing what Guardian's latest decision names, then calling finish_build again. Use host_refused only when a host check still refuses a step and nothing left in this attempt can fix it.";
 /** finish_build with its own coverage, so a submission after a denial is not the same again. */
 const finishAs = (n: number) =>
   call(
@@ -562,10 +566,10 @@ const reviewedHostRefusal = new MintFailure({
 // correction and after an earlier refusal a later finish_build got past alike. One that carries a
 // review is still the host's refusal, not a finish_build that got past the host's checks.
 it.each([
-  { basis: "after Guardian's correction", publish: [guardianCorrection, variantsUnsupported] },
+  { basis: "after Guardian's correction", publish: [guardianCorrection, hostCheckRefused] },
   {
     basis: "again after a finish_build got past the first",
-    publish: [variantsUnsupported, guardianCorrection, variantsUnsupported],
+    publish: [variantsUnsupported, guardianCorrection, hostCheckRefused],
   },
   { basis: "with a review of its own", publish: [reviewedHostRefusal] },
   {
@@ -594,6 +598,259 @@ it.each([
     expect(published).toBe(publish.length);
   },
 );
+
+/** A host's own publication refusal, by reason, as a host that names more reasons than core sends it. */
+const publicationRefused = (reason: string) =>
+  new MintFailure({
+    code: "PublicationUnavailable",
+    reason: reason as NonNullable<MintFailure["reason"]>,
+  });
+
+/** A host's own refusal whose step the host names in its review rationale, as core has no text for it. */
+const noMatchRationale =
+  "Run one live case whose input matches nothing, expecting empty, then call finish_build again with the same executionId.";
+const noMatchUntested = new MintFailure({
+  code: "PublicationUnavailable",
+  reason: "no_match_case_untested" as NonNullable<MintFailure["reason"]>,
+  review: { outcome: "deny", rationale: noMatchRationale },
+});
+
+// A host refusal whose instruction or rationale names the step that fixes it is no reason the
+// build cannot go on: the first host_refused report after it is refused with that step, and a
+// second is accepted, so a minter that still cannot get past it can stop. Core's own refusal
+// carries the step in its instruction; a host's refusal core has no text for carries it in its
+// rationale, and the generic instruction core gives it is not repeated.
+it.each([
+  {
+    refusal: variantsUnsupported,
+    step: {
+      refusalInstruction: expect.stringContaining(
+        "Either remove supportedVariants from the tool's metadata",
+      ),
+    },
+    absent: "refusalRationale",
+  },
+  {
+    refusal: noMatchUntested,
+    step: { refusalRationale: noMatchRationale },
+    absent: "refusalInstruction",
+  },
+])(
+  "refuses the first host_refused after $refusal.reason, which names its fix, and accepts a second",
+  async ({ refusal, step, absent }) => {
+    const explanation = "A Pomerado check refused publication, so no tool was published.";
+    const f = await fixture(
+      (_request, index) =>
+        [
+          call("execute", pureExample),
+          finishAs(0),
+          call("report_blocked", { reason: "host_refused", explanation }, "first"),
+          call("report_blocked", { reason: "host_refused", explanation }, "second"),
+        ][index] ?? prose("Stopping."),
+      { publish: () => Effect.fail(refusal) },
+    );
+    const outcome = await f.run();
+    const first = resultOf(f.requests[3], "first");
+    expect(first).toEqual({
+      status: "blocked_refused",
+      reason: "host_refusal_names_step",
+      refusedReason: refusal.reason,
+      ...step,
+      userInputRequired: false,
+      instruction: hostRefusalNamesStep,
+    });
+    expect(first).not.toHaveProperty(absent);
+    expect(outcome).toMatchObject({
+      build: "incomplete",
+      blocked: { reason: "host_refused", explanation },
+      stopReason: "host_refused",
+    });
+    expect(blockedRecord(outcome)).toMatchObject({
+      hostRefusals: [{ source: "publication", reason: refusal.reason }],
+    });
+  },
+);
+
+// A host's refusal core has no text for names no step unless it carries a rationale: the report
+// is taken at once, as before.
+it.each([
+  { refusal: "no_match_case_untested" },
+  { refusal: "source_changed_since_example" },
+])("takes host_refused at once after $refusal with no rationale", async ({ refusal }) => {
+  const explanation = "A Pomerado check refused publication, so no tool was published.";
+  const f = await fixture(
+    (_request, index) =>
+      [
+        call("execute", pureExample),
+        finishAs(0),
+        call("report_blocked", { reason: "host_refused", explanation }, "report"),
+      ][index] ?? prose("Stopping."),
+    { publish: () => Effect.fail(publicationRefused(refusal)) },
+  );
+  expect(await f.run()).toMatchObject({ blocked: { reason: "host_refused", explanation } });
+});
+
+// A sign-in screen the host refused because the password's fills are spent stands beside a refusal
+// that names its step, so the report is taken at once.
+it("takes host_refused at once when a refused password refill stands beside a named step", async () => {
+  const explanation = "A Pomerado check refused publication, so no tool was published.";
+  const f = await fixture(
+    (_request, index) =>
+      [
+        call("execute", pureExample),
+        finishAs(0),
+        call("report_blocked", { reason: "host_refused", explanation }, "report"),
+      ][index] ?? prose("Stopping."),
+    { publish: () => Effect.fail(variantsUnsupported), signInRefillRefused: () => true },
+  );
+  const outcome = await f.run();
+  expect(outcome).toMatchObject({ blocked: { reason: "host_refused", explanation } });
+  expect(blockedRecord(outcome)).toMatchObject({
+    hostRefusals: [
+      { source: "publication", reason: "variants_unsupported" },
+      { source: "sign_in_refill" },
+    ],
+  });
+});
+
+// The step a refusal names is offered once per reason: after it, the same refusal again, as when
+// the minter took the step and the host still refused, takes the report at once.
+it("takes host_refused at once when a refusal whose step was offered refuses again", async () => {
+  const explanation = "A Pomerado check refused publication, so no tool was published.";
+  let published = 0;
+  const f = await fixture(
+    (_request, index) =>
+      [
+        call("execute", pureExample),
+        finishAs(0),
+        call("report_blocked", { reason: "host_refused", explanation }, "first"),
+        finishAs(1),
+        call("report_blocked", { reason: "host_refused", explanation }, "second"),
+      ][index] ?? prose("Stopping."),
+    {
+      publish: () => {
+        published++;
+        return Effect.fail(variantsUnsupported);
+      },
+    },
+  );
+  const outcome = await f.run();
+  expect(published).toBe(2);
+  expect(resultOf(f.requests[3], "first")).toMatchObject({ reason: "host_refusal_names_step" });
+  expect(outcome).toMatchObject({ blocked: { reason: "host_refused" } });
+});
+
+// A refusal whose step is not the latest host refusal gets no extra round: a host check that
+// refused later, with no step of its own, stands as before.
+it("takes host_refused at once when a refusal with no named step is the latest", async () => {
+  const explanation = "A Pomerado check refused publication, so no tool was published.";
+  const refusals = [variantsUnsupported, hostCheckRefused];
+  let published = 0;
+  const f = await fixture(
+    (_request, index) =>
+      [
+        call("execute", pureExample),
+        finishAs(0),
+        finishAs(1),
+        call("report_blocked", { reason: "host_refused", explanation }, "report"),
+      ][index] ?? prose("Stopping."),
+    { publish: () => Effect.fail(refusals[published++] ?? hostCheckRefused) },
+  );
+  expect(await f.run()).toMatchObject({ blocked: { reason: "host_refused", explanation } });
+});
+
+// A host refusal the minter brings about by sending a submission the host already refused, with
+// nothing changed, after a later finish_build got past that refusal to Guardian, is the same
+// refusal again, not a new one: it gives host_refused no basis, so the build goes on from
+// Guardian's decision and publishes once the minter fixes it.
+it("grants no host_refused basis to a host refusal of a submission repeated unchanged", async () => {
+  const explanation = "A Pomerado check refused publication, so no tool was published.";
+  const refusals = [hostCheckRefused, guardianCorrection, hostCheckRefused];
+  let published = 0;
+  const f = await fixture(
+    (_request, index) =>
+      [
+        call("execute", pureExample),
+        finishAs(0),
+        finishAs(1),
+        call("report_blocked", { reason: "host_refused", explanation }, "passed"),
+        call(
+          "finish_build",
+          { ...finishBuild, coverage: "One actual example, round 0." },
+          "repeat",
+        ),
+        call("report_blocked", { reason: "host_refused", explanation }, "repeated"),
+        finishAs(2),
+      ][index] ?? prose("Stopping."),
+    {
+      publish: () => {
+        const refusal = refusals[published++];
+        return refusal === undefined
+          ? Effect.succeed({ publicationRef: "published_revision", diagnostics: [] })
+          : Effect.fail(refusal);
+      },
+    },
+  );
+  const outcome = await f.run();
+  expect(published).toBe(4);
+  expect(resultOf(f.requests[4], "passed")).toMatchObject({ reason: "host_refusal_passed" });
+  expect(resultOf(f.requests[5], "repeat")).toMatchObject({
+    reason: "autofill_recipe_not_verified",
+  });
+  expect(resultOf(f.requests[6], "repeated")).toEqual({
+    status: "blocked_refused",
+    reason: "host_refusal_repeated",
+    userInputRequired: false,
+    instruction: hostRefusalRepeated,
+  });
+  expect(outcome).not.toHaveProperty("blocked");
+  expect(outcome).toMatchObject({ build: "published" });
+});
+
+// What the latest finish_build did decides: once a later finish_build is refused before
+// publication, the repeat is no longer the last one, and the report is refused as for any host
+// refusal a finish_build got past.
+it("refuses host_refused as passed once a finish_build follows the repeated submission", async () => {
+  const explanation = "A Pomerado check refused publication, so no tool was published.";
+  const refusals = [hostCheckRefused, guardianCorrection, hostCheckRefused];
+  let published = 0;
+  const f = await fixture(
+    (_request, index) =>
+      [
+        call("execute", pureExample),
+        finishAs(0),
+        finishAs(1),
+        call("finish_build", { ...finishBuild, coverage: "One actual example, round 0." }, "repeat"),
+        call("finish_build", { ...finishBuild, coverage: "One actual example, round 1." }, "denied"),
+        call("report_blocked", { reason: "host_refused", explanation }, "report"),
+      ][index] ?? prose("Stopping."),
+    { publish: () => Effect.fail(refusals[published++] ?? hostCheckRefused) },
+  );
+  const outcome = await f.run();
+  expect(published).toBe(3);
+  expect(resultOf(f.requests[5], "denied")).toMatchObject({ reason: "unchanged_since_denial" });
+  expect(resultOf(f.requests[6], "report")).toMatchObject({ reason: "host_refusal_passed" });
+  expect(outcome).not.toHaveProperty("blocked");
+});
+
+// The same host refusal of a changed submission is a new refusal, and host_refused stands on it.
+it("keeps a host_refused basis on a host refusal of a changed submission", async () => {
+  const explanation = "A Pomerado check refused publication, so no tool was published.";
+  const refusals = [hostCheckRefused, guardianCorrection, hostCheckRefused];
+  let published = 0;
+  const f = await fixture(
+    (_request, index) =>
+      [
+        call("execute", pureExample),
+        finishAs(0),
+        finishAs(1),
+        finishAs(2),
+        call("report_blocked", { reason: "host_refused", explanation }, "report"),
+      ][index] ?? prose("Stopping."),
+    { publish: () => Effect.fail(refusals[published++] ?? hostCheckRefused) },
+  );
+  expect(await f.run()).toMatchObject({ blocked: { reason: "host_refused", explanation } });
+});
 
 const moveSite = [
   call("request_input", {

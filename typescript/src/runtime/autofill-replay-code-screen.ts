@@ -3,7 +3,7 @@ import type { YieldableError } from "effect/Cause";
 import type { AutofillStep } from "../destinations/autofill-step.js";
 import { report } from "./sign-in-telemetry.js";
 import type { AutofillReplayInput } from "./autofill-replay-steps.js";
-import { findCodeField } from "./autofill-unrecorded-code.js";
+import { findCodeScreen } from "./autofill-unrecorded-code.js";
 import type { Replay } from "./autofill-replay-session.js";
 import type { AutofillLogin } from "./autofill-values.js";
 
@@ -54,9 +54,9 @@ const unrecordedCodeShown = <E extends YieldableError, V extends string, L exten
     let shown = false;
     yield* report.bestEffort(
       Effect.gen(function* () {
-        const here = yield* findCodeField(input.hooks);
-        if ("outcome" in here || here.targets.fields[0]?.empty !== true) return;
-        const at = originOf(here.page);
+        const here = yield* findCodeScreen(input.hooks);
+        if ("outcome" in here || here.inspection.targets.fields[0]?.empty !== true) return;
+        const at = originOf(here.inspection.page);
         if (at === undefined || !replay.signInOrigins().has(at)) return;
         shown = yield* lastScreenGone(input, replay);
       }),
