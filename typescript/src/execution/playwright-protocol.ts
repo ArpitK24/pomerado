@@ -21,8 +21,9 @@ export const NativeWorkerRequest = Schema.Union(
       documentOrigin: Schema.String,
     }),
     text: Schema.String,
-    /** The keyboard's `InsertionOptions`: read a phone number back. */
+    /** The keyboard's `InsertionOptions`: read a phone number back, and type by keys. */
     phone: Schema.optional(Schema.Literal(true)),
+    keys: Schema.optional(Schema.Literal(true)),
   }),
 );
 export const NativeWorkerReply = Schema.Union(

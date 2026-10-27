@@ -468,20 +468,31 @@ it("keeps an unconfirmed cleanup's advice when the host also refused a field", a
 });
 
 // A submit the page keeps disabled after the fields were filled is no refusal of a field: the host
-// typed the password and never clicked, and the agent reads that the submit stayed disabled.
+// typed the password, typed it again key by key, never clicked, and the agent reads that the submit
+// stayed disabled.
 it("tells the agent a submit stayed disabled after the fields were filled, as no field refusal", async () => {
-  const answers: unknown[] = [inspected, focusAnswers.focused];
+  const answers: unknown[] = [inspected];
   const executed: string[] = [];
+  const typings: unknown[] = [];
   const recorder = recorderOn(
     {
       targetId: "primary",
       execute: (code) =>
         Effect.sync(() => {
           executed.push(code);
-          return answers.shift() ?? { submit: "disabled", url: login };
+          return (
+            answers.shift() ??
+            (code.includes("field.focus(") ? focusAnswers.focused : { submit: "disabled", url: login })
+          );
         }),
     },
-    { insertText: () => Effect.succeed("inserted" as const) },
+    {
+      insertText: (_target, _text, options) =>
+        Effect.sync(() => {
+          typings.push(options);
+          return "inserted" as const;
+        }),
+    },
   );
   const started = Date.now();
   const { report } = await Effect.runPromise(
@@ -499,11 +510,12 @@ it("tells the agent a submit stayed disabled after the fields were filled, as no
     failureDetail: expect.objectContaining({ phase: "submit_disabled" }),
     typed: true,
   });
-  // The host asked the page again while it waited, then stopped.
-  expect(Date.now() - started).toBeGreaterThanOrEqual(5_000);
+  // The host asked the page again while it waited, typed again by keys, waited again, then stopped.
+  expect(Date.now() - started).toBeGreaterThanOrEqual(10_000);
+  expect(typings).toEqual([undefined, { keys: true }]);
   expect(executed.length).toBeGreaterThan(3);
   expect(JSON.stringify(report)).not.toContain("synthetic-password");
-}, 15_000);
+}, 20_000);
 
 // A private answer's question that changed before the host typed is no field the page moved: the
 // agent hears that the question changed, so it sends the screen again for the owner to answer.
