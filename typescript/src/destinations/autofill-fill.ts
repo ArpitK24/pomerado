@@ -585,9 +585,15 @@ const sendWindow = (input: CallInput) =>
 /**
  * The step's submit call, judged against the controls as the host last judged them and guarded,
  * with `boxes`, the step's code boxes, each of which must hold exactly one character before the
- * click.
+ * click. `pressCovered`, on a click again only, presses the submit from the keyboard when another
+ * element catches its click.
  */
-const submitCall = (input: CallInput, progress: FillProgress, boxes: readonly number[]) =>
+const submitCall = (
+  input: CallInput,
+  progress: FillProgress,
+  boxes: readonly number[],
+  pressCovered = false,
+) =>
   // A re-judge never changes a method, so the submission's method is the one judged now.
   guardedSubmit(input.step, progress.judged, {
     settleMs: input.settleMs ?? 5_000,
@@ -600,6 +606,7 @@ const submitCall = (input: CallInput, progress: FillProgress, boxes: readonly nu
         : configuredOrigins(input.inspection),
     codeBoxes: boxes,
     alertsBefore: input.countNewAlerts === true,
+    pressCovered,
   });
 
 /**
@@ -822,11 +829,10 @@ const afterFieldCall = (
  * submits refuses the submit as before.
  * A step that names `dismiss` clicks that covering notice's own control first, when the page shows
  * it, and refuses the step with nothing typed when it is no such control (`dismissNotice`). A
- * click another element caught, which never reached the submit, is pressed from the keyboard
- * instead: the host focuses that same submit and presses Enter on it, only once focus landed on
- * it, under the same guard, and reports it `clicked` with `via: "keyboard"`; the element over it is
- * never clicked. When focus goes anywhere else it is `blocked`, with that element
- * (`blockedBy`): nothing was sent and the fields still hold what was typed. On a step that names
+ * click another element caught, which never reached the submit, is `blocked`, with that element
+ * (`blockedBy`): nothing was sent and the fields still hold what was typed, so the minter can name
+ * the element's own control as `dismiss` and send the screen again (`resubmitAutofillStep`), which
+ * presses the submit from the keyboard only when its click is caught again. On a step that names
  * `dismiss`, a notice drawn only once the fields were typed is dismissed then, and the submit
  * clicked once more, with nothing typed again. A click that ran out of time while the next page
  * loaded, as one through a slow chain of redirects does, is `clicked` once a request for the page's
@@ -895,7 +901,11 @@ export const fillAutofillStep = (input: FillInput): Effect.Effect<AutofillStepRe
  * fill typed must still hold something (lengths only, never a value), and each box of a code split
  * across one-character boxes exactly one character, or that field fails and the submit is not
  * attempted; otherwise the submit is judged, guarded and clicked as the fill's own was, and the
- * report says what became of it, `blocked` again included.
+ * report says what became of it. A click another element catches again, as one the dismiss did not
+ * clear or one with nothing to dismiss, such as a fixed footer, is pressed from the keyboard
+ * instead: the host focuses that same submit and presses Enter on it, only once focus landed on it,
+ * under the same guard, and reports it `clicked` with `via: "keyboard"`; the element over it is
+ * never clicked. When focus goes anywhere else it is `blocked` again.
  */
 export const resubmitAutofillStep = (input: CallInput): Effect.Effect<AutofillStepReport> =>
   Effect.gen(function* () {
@@ -918,7 +928,13 @@ export const resubmitAutofillStep = (input: CallInput): Effect.Effect<AutofillSt
     if (notice.refusal !== undefined) return notice.refusal;
     progress.check = typedFields(step, progress);
     const codeFields = step.fields.flatMap((field, index) => (field.slot === "code" ? [index] : []));
-    return yield* submitStep(input, progress, codeFields.length > 1 ? codeFields : [], undefined);
+    return yield* submitStep(
+      input,
+      progress,
+      codeFields.length > 1 ? codeFields : [],
+      undefined,
+      true,
+    );
   });
 
 /** The keyboard, typing each value key by key (`InsertionOptions.keys`). */
@@ -991,17 +1007,23 @@ const dismissNotice = (
  * must hold exactly one character before the click. A clicked submit reports where the page went
  * (`navigated`, `reportedNavigation`) only when `typed`, every value the sign-in typed on this
  * browser, is known: a click again, or a fill whose host did not say what it typed before
- * (`typedBefore`), never reports it.
+ * (`typedBefore`), never reports it. `pressCovered`, on a click again only, presses the submit from
+ * the keyboard when another element catches its click.
  */
 const submitStep = (
   input: CallInput,
   progress: FillProgress,
   boxes: readonly number[],
   typed: readonly string[] | undefined,
+  pressCovered = false,
 ) =>
   Effect.gen(function* () {
     const { step } = input;
-    const clicked = yield* submitWhenEnabled(input, progress, submitCall(input, progress, boxes));
+    const clicked = yield* submitWhenEnabled(
+      input,
+      progress,
+      submitCall(input, progress, boxes, pressCovered),
+    );
     if (clicked._tag === "Left")
       return failedCall(progress, clicked.left, { mayMutate: hostSubmits(step) });
     const answer = clicked.right;
