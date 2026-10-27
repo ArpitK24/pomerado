@@ -540,12 +540,7 @@ const pageSent = (answered: Either.Either<CallAnswer, Error>) =>
 const unchecked = (answered: Either.Either<CallAnswer, Error>) =>
   Either.isRight(answered) && "checked" in answered.right;
 
-/**
- * A step with a code field that the host submits. Its page may send the code itself as the last box
- * takes its digit, and load a new document. The host's next call can race that load, so the host
- * looks again (`awaitNewDocument`) when, once every field is typed, that call finds a box empty,
- * fails, or is the last box's typing and loses its answer.
- */
+/** A step with a code field that the host submits (see `fillAutofillStep`). */
 const codeSentBySite = (step: AutofillStep<FillSlot>) =>
   hostSubmits(step) && step.fields.some((field) => field.slot === "code");
 
@@ -553,12 +548,12 @@ const codeSentBySite = (step: AutofillStep<FillSlot>) =>
  * After a submit call of a step with a submit found its fields gone from the document the host
  * typed in (`left`, a refusal): looks again for up to `sendMs`, the step's settle wait at most
  * `pageSendMs`, in case a new document replaces it, as a form that hides itself while it sends what
- * was typed, then loads the site's answer, does. The same goes after a code step's call that may
- * have raced such a load (`codeSentBySite`, `first`). Each look only reads the page and never
- * clicks, so a look that fails, as one does while the page navigates, is a look lost. A look that
- * finds the page sent what was typed reports that (`page`). A look that finds the fields back
- * leaves the first answer standing, and so does the end of the wait. After any first answer
- * but `left`, a box still empty is the screen that answer found, so the host looks again.
+ * was typed, then loads the site's answer, does; so after a code step's answer that may have raced
+ * such a load (`codeSentBySite`, `first`). Each look only reads the page and never clicks, so a
+ * look that fails, as one does while the page navigates, is a look lost. A look that finds the page
+ * sent what was typed reports that (`page`). A look that finds the fields back leaves the first
+ * answer standing, and so does the end of the wait. After a submit call's first answer but `left`,
+ * a box that still fails its check is the screen that answer found, so the host looks again.
  */
 const awaitNewDocument = (
   input: CallInput,
@@ -572,12 +567,12 @@ const awaitNewDocument = (
     if (call.kind !== "submit") return first;
     const since = Date.now();
     const look: AutofillFillCall = { ...call, look: true };
-    const emptied = !leftOnly(first);
+    const raced = !leftOnly(first);
     while (Date.now() - since < sendMs) {
       yield* Effect.sleep(submitPollMs);
       const answered = yield* fillCall(input, progress, changes)(look);
       if (pageSent(answered)) return answered;
-      if (Either.isRight(answered) && !leftOnly(answered) && !(emptied && unchecked(answered)))
+      if (Either.isRight(answered) && !leftOnly(answered) && !(raced && unchecked(answered)))
         return first;
     }
     return first;
@@ -618,8 +613,8 @@ const submitCall = (input: CallInput, progress: FillProgress, boxes: readonly nu
  * the host looks again, at least once after it, even past the wait. When a later look finds the
  * page sent what was typed, the fill reports that; otherwise the first failure stands. On a step
  * with a submit whose fields are gone from the document the host typed in, the host looks again
- * without clicking (`awaitNewDocument`). So it does on a code step whose submit call found a box
- * empty or failed (`codeSentBySite`).
+ * without clicking (`awaitNewDocument`), as on a code step whose call raced its page
+ * (`codeSentBySite`).
  */
 const submitWhenEnabled = (input: CallInput, progress: FillProgress, call: AutofillFillCall) =>
   Effect.gen(function* () {
@@ -752,13 +747,12 @@ const afterFieldCall = (
           typing: true,
         });
         if (index < input.step.fields.length - 1 || !codeSentBySite(input.step)) return lost;
-        // The last box's digit may have gone in and the page sent the code itself, then loaded a
-        // new document: the host looks, clicking nothing, as after its submit call.
+        // The page may have sent the code on this last digit (`codeSentBySite`).
         progress.typedIn = answer.document;
         const looked = yield* awaitNewDocument(
           input,
           progress,
-          submitCall(input, progress, codeBoxes(input.step, input.values)),
+          submitCall(input, progress, []),
           Either.left(typing.left),
           sendWindow(input),
           { count: 0 },

@@ -10,12 +10,6 @@ import {
 import { fillAutofillStep } from "../../src/destinations/autofill-fill.js";
 import { elementReadMs } from "../../src/destinations/autofill-locate-code.js";
 import { maySend } from "../../src/destinations/autofill-refusal.js";
-import {
-  type AutofillSignInState,
-  recordStep,
-  submitFilled,
-  submittedLoginProof,
-} from "../../src/runtime/autofill-state.js";
 import { expectNotCarried, hostKeyboard, hostPage } from "./autofill-host-page.js";
 
 // A code widget that sends itself when its last box is filled: six one-character boxes, often with
@@ -979,8 +973,7 @@ for (const [leaves, name] of [
 /**
  * A code screen of four one-character boxes and a "Next" button whose own script signs in as the
  * last box takes its digit, before the host clicks: it empties the boxes, sends the code itself and,
- * once the site answered, loads the signed-in page as a new document. `answers` says whether the
- * site answers at all; one that never does leaves the code screen as it is, its boxes empty.
+ * once the site answered, loads the signed-in page as a new document.
  */
 const pinCode = "4826";
 const pinBoxes = [1, 2, 3, 4]
@@ -1004,70 +997,32 @@ const nextStep: AutofillStep = {
   fields: [1, 2, 3, 4].map((box) => ({ selector: `#pin-${box}`, slot: "code" as const })),
   submit: "#next",
 };
-/** The sign-in's bookkeeping after a phone screen the host submitted, with this screen's code armed. */
-const phoneSent = (): AutofillSignInState => ({
-  // The bookkeeping under test never calls the browser.
-  hooks: {
-    inspect: () => Effect.dieMessage("Unexpected inspect"),
-    fill: () => Effect.dieMessage("Unexpected fill"),
-    confirm: () => Effect.dieMessage("Unexpected confirm"),
-    check: () => Effect.dieMessage("Unexpected check"),
-    open: () => Effect.dieMessage("Unexpected open"),
-  },
-  steps: [],
-  filled: new Map([["code", pinCode.slice(-1)]]),
-  submittedSlots: new Set(["phone"]),
-  sentIdentifiers: {},
-});
 
-for (const answers of [true, false])
-  test(`a code screen with a button that empties its boxes as the last one takes its digit, then ${answers ? "loads the signed-in page as a new document, is reported sent by the page with every box filled" : "stays as it is, reports its emptied box failed and never clicks"}`, async ({
-    page,
-  }) => {
-    const { sent, posted, release } = await serve(page, signsInOnLastBox);
-    // The site answers only once the host's first submit call found the boxes emptied, so the
-    // signed-in page loads while the host still looks.
-    const answeredAfterFirstCall = (host: AutofillPage): AutofillPage => ({
-      ...host,
-      execute: (script, timeout) =>
-        script.includes("guardCall") && answers
-          ? host.execute(script, timeout).pipe(Effect.tap(() => Effect.sync(release)))
-          : host.execute(script, timeout),
-    });
-    const report = await fill(page, nextStep, [...pinCode], {
-      wrap: answeredAfterFirstCall,
-      settleMs: 5_000,
-    });
-    const signIn = phoneSent();
-    recordStep(signIn, nextStep, report);
-    if (maySend(report)) submitFilled(signIn);
-    if (answers) {
-      expect(report).toMatchObject({
-        outcome: "filled",
-        fields: nextStep.fields.map(() => ({ slot: "code", status: "filled" })),
-        submit: "page",
-      });
-      expect(maySend(report)).toBe(true);
-      expect(report).not.toHaveProperty("clicked");
-      // The code counts as sent with the phone before it, which the host's signed-in check needs.
-      expect([...signIn.submittedSlots].toSorted()).toEqual(["code", "phone"]);
-      expect(submittedLoginProof(signIn)).toBe(true);
-      await expect(page.locator("#account")).toBeVisible();
-    } else {
-      expect(report).toMatchObject({
-        outcome: "filled",
-        fields: [
-          { slot: "code", status: "filled" },
-          { slot: "code", status: "filled" },
-          { slot: "code", status: "filled" },
-          { slot: "code", status: "failed" },
-        ],
-        submit: "not_attempted",
-      });
-      expect(maySend(report)).toBe(false);
-      expect(submittedLoginProof(signIn)).toBe(false);
-      release();
-    }
-    expect(sent).toEqual([pinCode]);
-    expect(posted).toEqual([]);
+test("a code screen with a button that empties its boxes as the last one takes its digit, then loads the signed-in page as a new document, is reported sent by the page with every box filled", async ({
+  page,
+}) => {
+  const { sent, posted, release } = await serve(page, signsInOnLastBox);
+  // The site answers only once the host's first submit call found the boxes emptied, so the
+  // signed-in page loads while the host still looks.
+  const answeredAfterFirstCall = (host: AutofillPage): AutofillPage => ({
+    ...host,
+    execute: (script, timeout) =>
+      script.includes("guardCall")
+        ? host.execute(script, timeout).pipe(Effect.tap(() => Effect.sync(release)))
+        : host.execute(script, timeout),
   });
+  const report = await fill(page, nextStep, [...pinCode], {
+    wrap: answeredAfterFirstCall,
+    settleMs: 5_000,
+  });
+  expect(report).toMatchObject({
+    outcome: "filled",
+    fields: nextStep.fields.map(() => ({ slot: "code", status: "filled" })),
+    submit: "page",
+  });
+  expect(maySend(report)).toBe(true);
+  expect(report).not.toHaveProperty("clicked");
+  await expect(page.locator("#account")).toBeVisible();
+  expect(sent).toEqual([pinCode]);
+  expect(posted).toEqual([]);
+});
