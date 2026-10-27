@@ -485,6 +485,41 @@ const askedOnceReasons: ReadonlySet<string> = new Set([
   "http_implementation_stale",
   "login_url_one_time",
 ]);
+/**
+ * The host's publication refusals whose own instruction names a step that fixes them within the
+ * attempt and never says to end the build: an edit of the metadata or source, a fresh example, a
+ * live case or a sign-in run again. A `host_refused` report right after one is refused once per
+ * reason with that step, and a second is taken, so a minter that still cannot get past it can
+ * stop. `no_match_case_untested` and `source_changed_since_example` are refusals a host may add
+ * beside core's own.
+ */
+const namedStepReasons: ReadonlySet<string> = new Set([
+  "variants_unsupported",
+  "no_match_case_untested",
+  "source_changed_since_example",
+  "contract_input_mismatch",
+  "contract_output_mismatch",
+  "confirmation_undeclared",
+  "commit_marks_undeclared",
+  "write_path_undeclared",
+  "confirm_action_unmatched",
+  "refusal_unreadable",
+  "output_checks_blocked",
+  "site_metadata_required",
+  "tool_name_taken",
+  "definition_login_reference",
+  "secret_handle",
+  "file_handle",
+  "file_readback",
+  "card_readback",
+  "session_token_literal",
+  "session_token_placeholder",
+  "login_url_contains_credential",
+  "metadata_contains_credential",
+  "sign_in_version_refused",
+]);
+/** How many host-refused submissions an attempt remembers, the latest kept, to tell a repeat. */
+const rememberedRefusedSubmissions = 8;
 /** An execution request for a sign-in step, read before it decodes. */
 const isAuthenticate = Schema.is(Schema.Struct({ purpose: Schema.Literal("authenticate") }));
 /** How the minter goes on after a refusal that is neither an outage nor Guardian's. */
@@ -1370,6 +1405,23 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
        */
       let hostRefusalPassed = recovered?.hostRefusalPassed === true;
       /**
+       * The reasons of host refusals whose named step a `host_refused` report was already sent
+       * back to (`namedStepReasons`), so the next report on the same reason is taken. Kept in
+       * memory only: a takeover may send one report back once more.
+       */
+      const namedStepsOffered = new Set<string>();
+      /**
+       * The latest screened instruction each refusal in `namedStepReasons` gave the minter, which
+       * a `host_refused` report sent back to its step repeats.
+       */
+      const namedStepInstructions = new Map<string, string>();
+      /**
+       * The latest finish_build sent again, unchanged, a submission the host had already refused,
+       * after a finish_build got past that refusal to Guardian's review: the same refusal, which
+       * set no host refusal again. The next finish_build clears it.
+       */
+      let hostRefusalRepeated = false;
+      /**
        * The host's latest answer to `signInDestinationRefused`, read after each authenticate: it
        * refused a sign-in screen at its destination check, as a step result, and nothing it
        * counts cleared that since. A `host_refused` block stands on it. A takeover restores it, so
@@ -2175,6 +2227,13 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                   Effect.map((screened) => capped(screened.trim(), ledgerBounds.instructionChars)),
                   Effect.orElseSucceed(() => undefined),
                 );
+          if (
+            pending.reason !== undefined &&
+            namedStepReasons.has(pending.reason) &&
+            instruction !== undefined &&
+            instruction !== ""
+          )
+            namedStepInstructions.set(pending.reason, instruction);
           const decision = yield* recordDecision(
             instruction === undefined || instruction === "" ? pending : { ...pending, instruction },
           );
@@ -3573,7 +3632,11 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
         // (`liveTestsRefusal`): the attempt ran out of them, no batch fits, and the host's reserve
         // is closed, so nothing left in the attempt can clear a failure the denial rests on. While
         // the reserve is open, the report waits for it, even when no case is pending until the code
-        // changes. The owner's no to a
+        // changes. A host refusal of a submission the host already refused, sent again unchanged
+        // after a later finish_build got past that refusal, is no new refusal and sets none. When
+        // the latest host refusal's own instruction names a step that fixes it
+        // (`namedStepReasons`), the first report on its reason goes back with that step, and the
+        // next is taken. The owner's no to a
         // confirm question, or to a login, is `owner_declined`; a question handed back unanswered
         // is `question_unanswered`: no answer is no consent, so the minter may end the build
         // safely instead of going on past what it asked. A policy report that stands only on
@@ -3644,6 +3707,11 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
             "caller_input_not_cited",
             "caller_input needs the caller's own request, or a task update the owner confirmed, as its basis, so the build has not ended. In intent, name the request field or the update's revision that stops the build, or quote the words of the caller's instruction or of that update, then call report_blocked again. Prefer another reason when the site or a host check stopped it.",
           );
+        if (reason === "host_refused" && !hostRefusing && hostRefusalPassed && hostRefusalRepeated)
+          return refused(
+            "host_refusal_repeated",
+            "Your last finish_build sent again, unchanged, a submission the host refused before a later finish_build got past that refusal to Guardian's review, so it is no new refusal and the build has not ended. Prefer fixing what Guardian's latest decision names, then calling finish_build again. Use host_refused only when a host check still refuses a step and nothing left in this attempt can fix it.",
+          );
         if (reason === "host_refused" && !hostRefusing && hostRefusalPassed)
           return refused(
             "host_refusal_passed",
@@ -3654,6 +3722,31 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
             "host_not_refused",
             "No host check refused a step in this attempt, so the build has not ended. host_refused needs a host check that refused a step the build needs, such as finish_build, a sign-in form or a site change, or live tests the host refuses with no batch left while Guardian's denial of the last publication stands.",
           );
+        // The latest host refusal names its own fix, and no other host check stands beside it:
+        // the first report on its reason goes back with that step, and the next is taken.
+        const latestHostRefusal = hostRefused ? standingHostRefusals.at(-1)?.refusal : undefined;
+        const namedStep =
+          latestHostRefusal?.source === "publication" &&
+          latestHostRefusal.reason !== undefined &&
+          namedStepReasons.has(latestHostRefusal.reason)
+            ? latestHostRefusal.reason
+            : undefined;
+        if (
+          reason === "host_refused" &&
+          namedStep !== undefined &&
+          !namedStepsOffered.has(namedStep) &&
+          !refillRefused &&
+          !signInDestinationRefused &&
+          !liveTestsSpent
+        ) {
+          namedStepsOffered.add(namedStep);
+          const told = namedStepInstructions.get(namedStep);
+          return refused(
+            "host_refusal_names_step",
+            "The host's last refusal, refusedReason, names a step that fixes it in its instruction, so the build has not ended. Prefer doing that step and calling finish_build again; if publication still cannot pass, you may report host_refused again.",
+            { refusedReason: namedStep, ...(told === undefined ? {} : { refusalInstruction: told }) },
+          );
+        }
         if (
           reason === "policy" &&
           !guardianRefused &&
@@ -5046,17 +5139,35 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
             }),
           ),
         );
-      const unchangedSinceDenial = (proposed: PublicationRequest) =>
+      /** A submission as `deniedSubmission` keeps it, for telling the same one again. */
+      const submissionSnapshot = (proposed: PublicationRequest, paths: readonly string[]) =>
+        Effect.map(submissionKey(proposed, paths), (key) => ({
+          paths,
+          key,
+          liveTests: currentLiveTests(),
+        }));
+      /** Whether `proposed` is `kept` again, with nothing it rests on changed since. */
+      const sameSubmission = (
+        kept: NonNullable<typeof deniedSubmission>,
+        proposed: PublicationRequest,
+      ) =>
         Effect.gen(function* () {
-          const denied = deniedSubmission;
-          if (denied === undefined) return false;
           const liveTests = currentLiveTests();
           return (
-            liveTests.length === denied.liveTests.length &&
-            liveTests.every((record, index) => record === denied.liveTests[index]) &&
-            (yield* submissionKey(proposed, denied.paths)) === denied.key
+            liveTests.length === kept.liveTests.length &&
+            liveTests.every((record, index) => record === kept.liveTests[index]) &&
+            (yield* submissionKey(proposed, kept.paths)) === kept.key
           );
         });
+      const unchangedSinceDenial = (proposed: PublicationRequest) =>
+        deniedSubmission === undefined
+          ? Effect.succeed(false)
+          : sameSubmission(deniedSubmission, proposed);
+      /**
+       * The latest submissions the host's own publication checks refused, up to
+       * `rememberedRefusedSubmissions`. Kept in memory only, as `deniedSubmission` is.
+       */
+      let hostRefusedSubmissions: NonNullable<typeof deniedSubmission>[] = [];
       const actions: MintActions = {
         retainCapture: (input) =>
           serial.withPermits(1)(
@@ -5450,6 +5561,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
             Effect.gen(function* () {
               if (questionOnly) return yield* new MintFailure({ code: "ScopeDenied" });
               yield* active("publication");
+              hostRefusalRepeated = false;
               const write = buildEffect === "write";
               const proposed = yield* decode(PublicationRequest, input).pipe(
                 Effect.tapError(() =>
@@ -5775,7 +5887,23 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                 !publicationOutage(publication.left) &&
                 publication.left.reason !== "example_output_unavailable" &&
                 !askedOnceReasons.has(publication.left.reason ?? "");
-              if (hostChecksRefused)
+              // A submission the host already refused, sent again with nothing changed after a
+              // later finish_build got past that refusal, is refused the same way again: no new
+              // host refusal, so a minter cannot make a basis for host_refused by repeating one.
+              const refusedSubmission = hostChecksRefused
+                ? yield* submissionSnapshot(proposed, [proposed.entrypoint, httpVersionPath])
+                : undefined;
+              hostRefusalRepeated =
+                refusedSubmission !== undefined &&
+                !hostRefused &&
+                (yield* Effect.exists(hostRefusedSubmissions, (kept) =>
+                  sameSubmission(kept, proposed),
+                ));
+              if (refusedSubmission !== undefined)
+                hostRefusedSubmissions = [...hostRefusedSubmissions, refusedSubmission].slice(
+                  -rememberedRefusedSubmissions,
+                );
+              if (hostChecksRefused && !hostRefusalRepeated)
                 refuseByHost({
                   source: "publication",
                   code: publication.left.code,
@@ -5814,11 +5942,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                     ...(denial?.findings ?? []).map((finding) => workspacePath(finding.path)),
                   ]),
                 ];
-                deniedSubmission = {
-                  paths,
-                  key: yield* submissionKey(proposed, paths),
-                  liveTests: currentLiveTests(),
-                };
+                deniedSubmission = yield* submissionSnapshot(proposed, paths);
               }
               // Guardian's public reason reaches the caller screened like the caller's other
               // text: credentials and host-private values out, cut to its bound. A screen that

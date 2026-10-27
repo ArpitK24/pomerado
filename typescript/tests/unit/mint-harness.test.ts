@@ -958,6 +958,32 @@ it("keeps a host refusal a later finish_build got past cleared across a takeover
   ]);
 });
 
+// A takeover reads the latest host refusal from the checkpoint's sources, so one whose instruction
+// names its fix still sends the first host_refused report back to that step. A checkpoint from an
+// older worker, which kept the refusal without its source, decodes as before and grants the ending.
+it.each([
+  {
+    checkpoint: "this worker's",
+    edit: () => undefined,
+    reply: { status: "blocked_refused", reason: "host_refusal_names_step" },
+  },
+  {
+    checkpoint: "an older worker's",
+    edit: (checkpoint: Record<string, unknown>) => {
+      delete checkpoint["hostRefusalSources"];
+    },
+    reply: { status: "blocked" },
+  },
+])(
+  "sends host_refused back to a named step across a takeover from $checkpoint checkpoint",
+  async ({ edit, reply }) => {
+    const replies = await hostRefusedAfterTakeover(edit, [
+      new MintFailure({ code: "PublicationUnavailable", reason: "variants_unsupported" }),
+    ]);
+    expect(replies).toEqual([expect.objectContaining(reply)]);
+  },
+);
+
 /**
  * The reply to a takeover's site_declined report after its predecessor sent a sign-in that nothing
  * confirmed, from the predecessor's checkpoint as `edit` leaves it.
