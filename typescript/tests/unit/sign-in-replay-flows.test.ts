@@ -435,13 +435,19 @@ it("signs a read in once the site lands off the recorded screens past a skipped 
   expect(Date.now() - started).toBeLessThan(10_000);
 });
 
-it("waits out a write's skipped code screen when its landing shows no marker, opening no account page", { timeout: 20_000 }, async () => {
+// A write's sign-in still needs its marker: it waits out the skipped code screen, then its sign-in
+// check, whose last check alone opens the account page, finds the session.
+it("waits out a write's skipped code screen when its landing shows no marker, then signs in at the last check, which alone opens the account page", { timeout: 20_000 }, async () => {
   const fake = skippedCodeSite();
   const { result } = await signIn(accountRecipe(), fake, {}, { stepWaitMs: 2_000, pollMs: 20 });
-  expect(result).toEqual(
-    Either.left(new SignInRunFailed({ code: "RecipeFailed", reason: "not_found" })),
-  );
-  expect(fake.trace).toEqual(["open:/login", "ask:missing_credentials", "open:/login", "fill:login"]);
+  expect(result).toEqual(Either.right({ alreadySignedIn: false }));
+  expect(fake.trace).toEqual([
+    "open:/login",
+    "ask:missing_credentials",
+    "open:/login",
+    "fill:login",
+    "open:/account",
+  ]);
 });
 
 // The local host sets `startedEmpty` on every sign-in, so a read's check without values never takes

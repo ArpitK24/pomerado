@@ -325,8 +325,9 @@ refuses a third unchanged-password send.
 
 Flows vary. A login may be passwordless (identifier, then a code or a link), ask for a code after the
 password, offer several code methods, or ask you to approve on another device. Record every screen
-the sign-in shows, a code screen included: the tool's runs replay only the screens you recorded and
-never look for another, so a run that meets a screen you did not record requests sign-in repair.
+the sign-in shows, a code screen included. The tool's runs replay the screens you recorded and go
+on when one does not show. Of the screens you did not record, they look only for a one-time code
+screen, so a run that meets any other screen you did not record requests sign-in repair.
 Some sites answer the password with a screen that asks for it again together with a one-time
 code, the password field empty beside the code field: map that screen as one `signInStep` with
 both fields. The host fills the password there once more, records that the screen asks for it
