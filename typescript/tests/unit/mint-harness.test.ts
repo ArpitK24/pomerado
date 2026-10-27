@@ -974,6 +974,15 @@ it.each([
     },
     reply: { status: "blocked" },
   },
+  // A sign-in screen the host refused at its destination check stands beside the named step, so
+  // the report is taken at once.
+  {
+    checkpoint: "this worker's, with a sign-in screen refused at its destination,",
+    edit: (checkpoint: Record<string, unknown>) => {
+      checkpoint["signInDestinationRefused"] = true;
+    },
+    reply: { status: "blocked" },
+  },
 ])(
   "sends host_refused back to a named step across a takeover from $checkpoint checkpoint",
   async ({ edit, reply }) => {

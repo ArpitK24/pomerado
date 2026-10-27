@@ -486,17 +486,13 @@ const askedOnceReasons: ReadonlySet<string> = new Set([
   "login_url_one_time",
 ]);
 /**
- * The host's publication refusals whose own instruction names a step that fixes them within the
- * attempt and never says to end the build: an edit of the metadata or source, a fresh example, a
- * live case or a sign-in run again. A `host_refused` report right after one is refused once per
- * reason with that step, and a second is taken, so a minter that still cannot get past it can
- * stop. `no_match_case_untested` and `source_changed_since_example` are refusals a host may add
- * beside core's own.
+ * The host's publication refusals whose instruction here names a step that fixes them within the
+ * attempt and never says to end the build: an edit of the metadata or source, a fresh example, or
+ * a sign-in run again. A `host_refused` report right after one is refused once per reason with
+ * that step, and a second is taken, so a minter that still cannot get past it can stop.
  */
 const namedStepReasons: ReadonlySet<string> = new Set([
   "variants_unsupported",
-  "no_match_case_untested",
-  "source_changed_since_example",
   "contract_input_mismatch",
   "contract_output_mismatch",
   "confirmation_undeclared",
@@ -518,6 +514,12 @@ const namedStepReasons: ReadonlySet<string> = new Set([
   "metadata_contains_credential",
   "sign_in_version_refused",
 ]);
+/**
+ * Refusals a host adds beside core's own, for which core has only its generic instruction: the
+ * host names the step in the refusal's review rationale. One names its step only when it carries
+ * a rationale, and only then is a `host_refused` report sent back to it.
+ */
+const rationaleStepReasons: ReadonlySet<string> = new Set(["no_match_case_untested"]);
 /** How many host-refused submissions an attempt remembers, the latest kept, to tell a repeat. */
 const rememberedRefusedSubmissions = 8;
 /** An execution request for a sign-in step, read before it decodes. */
@@ -1416,6 +1418,12 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
        */
       const namedStepInstructions = new Map<string, string>();
       /**
+       * The screened review rationale the latest host refusal of each reason in
+       * `namedStepReasons` or `rationaleStepReasons` carried, which a `host_refused` report sent
+       * back to its step repeats. A refusal that carries none removes its reason's.
+       */
+      const namedStepRationales = new Map<string, string>();
+      /**
        * The latest finish_build sent again, unchanged, a submission the host had already refused,
        * after a finish_build got past that refusal to Guardian's review: the same refusal, which
        * set no host refusal again. The next finish_build clears it.
@@ -2227,13 +2235,11 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                   Effect.map((screened) => capped(screened.trim(), ledgerBounds.instructionChars)),
                   Effect.orElseSucceed(() => undefined),
                 );
-          if (
-            pending.reason !== undefined &&
-            namedStepReasons.has(pending.reason) &&
-            instruction !== undefined &&
-            instruction !== ""
-          )
-            namedStepInstructions.set(pending.reason, instruction);
+          if (pending.reason !== undefined && namedStepReasons.has(pending.reason)) {
+            if (instruction === undefined || instruction === "")
+              namedStepInstructions.delete(pending.reason);
+            else namedStepInstructions.set(pending.reason, instruction);
+          }
           const decision = yield* recordDecision(
             instruction === undefined || instruction === "" ? pending : { ...pending, instruction },
           );
@@ -3634,9 +3640,9 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
         // the reserve is open, the report waits for it, even when no case is pending until the code
         // changes. A host refusal of a submission the host already refused, sent again unchanged
         // after a later finish_build got past that refusal, is no new refusal and sets none. When
-        // the latest host refusal's own instruction names a step that fixes it
-        // (`namedStepReasons`), the first report on its reason goes back with that step, and the
-        // next is taken. The owner's no to a
+        // the latest host refusal names a step that fixes it, in core's instruction
+        // (`namedStepReasons`) or a host's rationale (`rationaleStepReasons`), the first report on
+        // its reason goes back with that step, and the next is taken. The owner's no to a
         // confirm question, or to a login, is `owner_declined`; a question handed back unanswered
         // is `question_unanswered`: no answer is no consent, so the minter may end the build
         // safely instead of going on past what it asked. A policy report that stands only on
@@ -3722,13 +3728,17 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
             "host_not_refused",
             "No host check refused a step in this attempt, so the build has not ended. host_refused needs a host check that refused a step the build needs, such as finish_build, a sign-in form or a site change, or live tests the host refuses with no batch left while Guardian's denial of the last publication stands.",
           );
-        // The latest host refusal names its own fix, and no other host check stands beside it:
-        // the first report on its reason goes back with that step, and the next is taken.
+        // The latest host refusal names its own fix, and neither sign-in screen answer stands
+        // beside it: the first report on its reason goes back with that step, and the next is
+        // taken. Spent live tests never stand beside it: they need Guardian's denial of the latest
+        // publication, and a host refusal of a later one ends that denial.
         const latestHostRefusal = hostRefused ? standingHostRefusals.at(-1)?.refusal : undefined;
         const namedStep =
           latestHostRefusal?.source === "publication" &&
           latestHostRefusal.reason !== undefined &&
-          namedStepReasons.has(latestHostRefusal.reason)
+          (namedStepReasons.has(latestHostRefusal.reason) ||
+            (rationaleStepReasons.has(latestHostRefusal.reason) &&
+              namedStepRationales.has(latestHostRefusal.reason)))
             ? latestHostRefusal.reason
             : undefined;
         if (
@@ -3736,15 +3746,21 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
           namedStep !== undefined &&
           !namedStepsOffered.has(namedStep) &&
           !refillRefused &&
-          !signInDestinationRefused &&
-          !liveTestsSpent
+          !signInDestinationRefused
         ) {
           namedStepsOffered.add(namedStep);
-          const told = namedStepInstructions.get(namedStep);
+          const told = namedStepReasons.has(namedStep)
+            ? namedStepInstructions.get(namedStep)
+            : undefined;
+          const rationale = namedStepRationales.get(namedStep);
           return refused(
             "host_refusal_names_step",
-            "The host's last refusal, refusedReason, names a step that fixes it in its instruction, so the build has not ended. Prefer doing that step and calling finish_build again; if publication still cannot pass, you may report host_refused again.",
-            { refusedReason: namedStep, ...(told === undefined ? {} : { refusalInstruction: told }) },
+            "The host's last refusal, refusedReason, names a step that fixes it in its instruction or rationale, so the build has not ended. Prefer doing that step and calling finish_build again; if publication still cannot pass, you may report host_refused again.",
+            {
+              refusedReason: namedStep,
+              ...(told === undefined ? {} : { refusalInstruction: told }),
+              ...(rationale === undefined ? {} : { refusalRationale: rationale }),
+            },
           );
         }
         if (
@@ -6004,6 +6020,25 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                 // The review as the minter reads it, screened once for every reply below.
                 const review =
                   error.review === undefined ? undefined : yield* minterReview(error.review);
+                if (
+                  error.code === "PublicationUnavailable" &&
+                  error.reason !== undefined &&
+                  (namedStepReasons.has(error.reason) || rationaleStepReasons.has(error.reason))
+                ) {
+                  // Screened on its own, so a screen that fails keeps no rationale rather than
+                  // the delivery notice the minter's copy of the review takes in its place.
+                  const rationale =
+                    error.review === undefined
+                      ? ""
+                      : yield* screenMintText(dependencies, error.review.rationale).pipe(
+                          Effect.map((screened) =>
+                            capped(screened.trim(), ledgerBounds.instructionChars),
+                          ),
+                          Effect.orElseSucceed(() => ""),
+                        );
+                  if (rationale === "") namedStepRationales.delete(error.reason);
+                  else namedStepRationales.set(error.reason, rationale);
+                }
                 if (review !== undefined)
                   yield* recordDenial({
                     review: "publication",
