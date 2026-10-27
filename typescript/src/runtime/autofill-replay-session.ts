@@ -240,8 +240,8 @@ export type ReplaySession<
  * A submitted credential screen returning with no recorded error marker is no verdict on the login:
  * the replay ends with the login unmarked (`credential_screen_returned`).
  */
-const returnedCredential = <E extends YieldableError, V extends string, L extends AutofillLogin>(
-  session: ReplaySession<E, V, L>,
+export const returnedCredential = <E extends YieldableError, V extends string, L extends AutofillLogin>(
+  session: Pick<ReplaySession<E, V, L>, "progress" | "sent" | "hooks">,
 ) =>
   Effect.gen(function* () {
     const { progress, sent, hooks } = session;
@@ -260,12 +260,17 @@ const returnedCredential = <E extends YieldableError, V extends string, L extend
     }
     return undefined;
   });
-/** Resolve current rejection evidence before waiting for a later screen. */
+/**
+ * Resolve current rejection evidence before waiting for a later screen. The submitted screen still
+ * showing is the site's answer only at the wait's deadline (`due`), as a site may look the account
+ * up before it shows the next screen.
+ */
 const screenRejection = <E extends YieldableError, V extends string, L extends AutofillLogin>(
   session: ReplaySession<E, V, L>,
   retryExtras: (
     observed: readonly RejectedMarker["slot"][],
   ) => ReturnType<typeof correctReplayExtras<E, V, L>>,
+  due: boolean,
 ) =>
   Effect.gen(function* () {
     const observed = yield* session.observeRejections;
@@ -277,7 +282,7 @@ const screenRejection = <E extends YieldableError, V extends string, L extends A
       return marked === "password"
         ? ("password_rejected" as const)
         : ("username_rejected" as const);
-    return yield* returnedCredential(session);
+    return due ? yield* returnedCredential(session) : undefined;
   });
 
 /**
@@ -442,7 +447,7 @@ export const makeReplay = <E extends YieldableError, V extends string, L extends
       session.progress,
       session.timing,
       (request) => session.values.resolve(request, input.credentials),
-      () => screenRejection(session, extras),
+      (due) => screenRejection(session, extras, due),
       input.hosted?.resubmit?.(session) ?? ((gate) => gate),
       {
         onScreens: (page) => input.recipe.steps.some((step) => session.matchesRecorded(page, step)),

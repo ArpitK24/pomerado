@@ -83,6 +83,15 @@ export interface SignInReplayBrowser<E> extends SignInBrowser<E> {
     popup?: AutofillPopup,
   ) => Effect.Effect<boolean, E>;
   /**
+   * The number a device approval's screen shows for the owner to pick on their device
+   * (`AutofillHooks.approvalNumber`). A browser without it asks for the approval with no number.
+   */
+  readonly approvalNumber?: (
+    selector: string,
+    page: string,
+    popup?: AutofillPopup,
+  ) => Effect.Effect<string | undefined, E>;
+  /**
    * Clears the browser's data for the site, once, after a replay found another workspace's
    * sign-in before this login sent anything (`workspace_unverified`). A host without it fails
    * the run at the first such refusal.
@@ -140,6 +149,7 @@ const replayHooks = <E>(
       indicator,
       settle,
     );
+  const readNumber = browser.approvalNumber;
   return {
     inspect: (step) => browser.inspect(step).pipe(Effect.mapError(failed)),
     // One-character code boxes take the code one character each, as the host types it.
@@ -161,6 +171,12 @@ const replayHooks = <E>(
         ),
     markerVisible: (selector, screenPage, popup) =>
       browser.markerVisible(selector, screenPage, popup).pipe(Effect.mapError(failed)),
+    ...(readNumber === undefined
+      ? {}
+      : {
+          approvalNumber: (selector: string, screenPage: string, popup?: AutofillPopup) =>
+            readNumber.call(browser, selector, screenPage, popup).pipe(Effect.mapError(failed)),
+        }),
     ...(allowCantTell ? { confirmCantTell: () => Effect.void } : {}),
     startedEmpty: true,
   };

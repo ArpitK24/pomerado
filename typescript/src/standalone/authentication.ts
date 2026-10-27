@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { Effect, Schema } from "effect";
 import { fillAutofillStep, resubmitAutofillStep } from "../destinations/autofill-fill.js";
-import { autofillMarkerVisible } from "../destinations/autofill-marker.js";
+import { autofillApprovalNumber, autofillMarkerVisible } from "../destinations/autofill-marker.js";
 import {
   checkAutofillSignedIn,
   inspectAutofillStep,
@@ -121,7 +121,7 @@ export const makeSignInBrowser = (options: {
   readonly authenticationOrigins: readonly string[];
   readonly typing: SessionTyping;
 }): SignInBrowser<never> &
-  Pick<SignInReplayBrowser<Error>, "open" | "markerVisible" | "clearSiteData"> => {
+  Pick<SignInReplayBrowser<Error>, "open" | "markerVisible" | "approvalNumber" | "clearSiteData"> => {
   const { page, siteOrigin, typing } = options;
   const { authenticationOrigins } = options;
   const calls = rememberTyping({
@@ -145,7 +145,8 @@ export const makeSignInBrowser = (options: {
           }),
         ),
       ),
-    typed: typing.typed,
+    // Read live: a card fill on the same browser marks the shared record too.
+    typed: () => typing.typed,
   });
   return {
     inspect: calls.inspect,
@@ -173,6 +174,15 @@ export const makeSignInBrowser = (options: {
     clearSiteData: () => clearSiteData(page, siteOrigin),
     markerVisible: (selector, screenPage, popup) =>
       autofillMarkerVisible({
+        selector,
+        screenPage,
+        popup,
+        page,
+        siteOrigin,
+        authenticationOrigins,
+      }),
+    approvalNumber: (selector, screenPage, popup) =>
+      autofillApprovalNumber({
         selector,
         screenPage,
         popup,

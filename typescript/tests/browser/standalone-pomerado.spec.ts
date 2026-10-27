@@ -2809,6 +2809,9 @@ test("a two-screen sign-in saves the next screen's controls and inlines them whe
   const identifier = JSON.stringify(toolResult("identifier"));
   expect(identifier).toContain("captures/after-submit/1.json");
   expect(identifier).not.toContain("Help topic");
+  // Where the click went is the host's alone: no step result the minter reads holds it.
+  for (const callId of ["identifier", "wrong_screen"])
+    expect(objects(toolResult(callId)).filter((item) => "navigated" in item)).toEqual([]);
   // The minter reads it like any other workspace file.
   const read = JSON.stringify(toolResult("read_controls"));
   expect(read).toContain("Help topic 0");

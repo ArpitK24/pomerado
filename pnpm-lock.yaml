@@ -25,7 +25,7 @@ importers:
         version: 12.0.0
       openai:
         specifier: 7.23.0
-        version: 7.23.0(ws@8.22.0)(zod@4.6.5)
+        version: 7.23.0(ws@8.22.0)(zod@4.6.6)
       oxc-parser:
         specifier: 0.152.0
         version: 0.152.0
@@ -41,7 +41,7 @@ importers:
         version: 2.3.1
       '@openai/agents':
         specifier: 0.18.0
-        version: 0.18.0(ws@8.22.0)(zod@4.6.5)
+        version: 0.18.0(ws@8.22.0)(zod@4.6.6)
       '@playwright/test':
         specifier: 1.63.0
         version: 1.63.0
@@ -914,8 +914,8 @@ packages:
       utf-8-validate:
         optional: true
 
-  zod@4.6.5:
-    resolution: {integrity: sha512-v5l/aFXZQeai4awLbOpSoHecE9UiMrnfx75tEXLjNonXVARxQ5mOeipTjROUchszUNCqnE+hqAMujRsRHsut2Q==}
+  zod@4.6.6:
+    resolution: {integrity: sha512-4UmzQUF5fxvfcYHlbjBmejU+w+hbDnWFx4aS8kBx7nPBHcO2SqPbpAG8snbdg+Xse4pRefR98hgjFgIMCI/UhA==}
 
 snapshots:
 
@@ -936,25 +936,25 @@ snapshots:
       eventsource-parser: 3.1.1
       jose: 6.2.12
       pkce-challenge: 5.0.1
-      zod: 4.6.5
+      zod: 4.6.6
 
   '@modelcontextprotocol/core@2.3.1':
     dependencies:
-      zod: 4.6.5
+      zod: 4.6.6
 
   '@modelcontextprotocol/server@2.3.1':
     dependencies:
       '@modelcontextprotocol/core': 2.3.1
-      zod: 4.6.5
+      zod: 4.6.6
 
-  '@openai/agents-core@0.18.0(ws@8.22.0)(zod@4.6.5)':
+  '@openai/agents-core@0.18.0(ws@8.22.0)(zod@4.6.6)':
     dependencies:
       '@standard-schema/spec': 1.1.0
       debug: 4.4.3
-      openai: 7.23.0(ws@8.22.0)(zod@4.6.5)
+      openai: 7.23.0(ws@8.22.0)(zod@4.6.6)
     optionalDependencies:
       '@modelcontextprotocol/client': 2.3.1
-      zod: 4.6.5
+      zod: 4.6.6
     transitivePeerDependencies:
       - '@aws-sdk/credential-provider-node'
       - '@smithy/hash-node'
@@ -963,12 +963,12 @@ snapshots:
       - undici
       - ws
 
-  '@openai/agents-openai@0.18.0(ws@8.22.0)(zod@4.6.5)':
+  '@openai/agents-openai@0.18.0(ws@8.22.0)(zod@4.6.6)':
     dependencies:
-      '@openai/agents-core': 0.18.0(ws@8.22.0)(zod@4.6.5)
+      '@openai/agents-core': 0.18.0(ws@8.22.0)(zod@4.6.6)
       debug: 4.4.3
-      openai: 7.23.0(ws@8.22.0)(zod@4.6.5)
-      zod: 4.6.5
+      openai: 7.23.0(ws@8.22.0)(zod@4.6.6)
+      zod: 4.6.6
     transitivePeerDependencies:
       - '@aws-sdk/credential-provider-node'
       - '@smithy/hash-node'
@@ -977,13 +977,13 @@ snapshots:
       - undici
       - ws
 
-  '@openai/agents-realtime@0.18.0(zod@4.6.5)':
+  '@openai/agents-realtime@0.18.0(zod@4.6.6)':
     dependencies:
-      '@openai/agents-core': 0.18.0(ws@8.22.0)(zod@4.6.5)
+      '@openai/agents-core': 0.18.0(ws@8.22.0)(zod@4.6.6)
       '@types/ws': 8.18.2
       debug: 4.4.3
       ws: 8.22.0
-      zod: 4.6.5
+      zod: 4.6.6
     transitivePeerDependencies:
       - '@aws-sdk/credential-provider-node'
       - '@smithy/hash-node'
@@ -993,14 +993,14 @@ snapshots:
       - undici
       - utf-8-validate
 
-  '@openai/agents@0.18.0(ws@8.22.0)(zod@4.6.5)':
+  '@openai/agents@0.18.0(ws@8.22.0)(zod@4.6.6)':
     dependencies:
-      '@openai/agents-core': 0.18.0(ws@8.22.0)(zod@4.6.5)
-      '@openai/agents-openai': 0.18.0(ws@8.22.0)(zod@4.6.5)
-      '@openai/agents-realtime': 0.18.0(zod@4.6.5)
+      '@openai/agents-core': 0.18.0(ws@8.22.0)(zod@4.6.6)
+      '@openai/agents-openai': 0.18.0(ws@8.22.0)(zod@4.6.6)
+      '@openai/agents-realtime': 0.18.0(zod@4.6.6)
       debug: 4.4.3
-      openai: 7.23.0(ws@8.22.0)(zod@4.6.5)
-      zod: 4.6.5
+      openai: 7.23.0(ws@8.22.0)(zod@4.6.6)
+      zod: 4.6.6
     transitivePeerDependencies:
       - '@aws-sdk/credential-provider-node'
       - '@smithy/hash-node'
@@ -1365,10 +1365,10 @@ snapshots:
 
   obug@3.0.0: {}
 
-  openai@7.23.0(ws@8.22.0)(zod@4.6.5):
+  openai@7.23.0(ws@8.22.0)(zod@4.6.6):
     optionalDependencies:
       ws: 8.22.0
-      zod: 4.6.5
+      zod: 4.6.6
 
   oxc-parser@0.152.0:
     dependencies:
@@ -1533,4 +1533,4 @@ snapshots:
 
   ws@8.22.0: {}
 
-  zod@4.6.5: {}
+  zod@4.6.6: {}

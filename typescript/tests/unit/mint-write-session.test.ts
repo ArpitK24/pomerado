@@ -132,6 +132,7 @@ describe("a write session's publication check", () => {
   const contract = (write?: {
     readonly confirmation: "message" | "readback" | "unverifiable";
     readonly commits?: readonly unknown[];
+    readonly commitsUnproven?: readonly unknown[];
   }) => ({ contract: write === undefined ? {} : { write }, inputDecodes: true });
   const check = (
     steps: readonly WriteSessionMarks[],
@@ -197,6 +198,34 @@ describe("a write session's publication check", () => {
         }).result,
       ),
     ).toBe("contract_input_mismatch");
+  });
+
+  describe("with save steps the session stopped before, declared unproven", () => {
+    // The session saved the product, the one save the caller's facts allowed, and confirmed it.
+    const saved: WriteSessionMarks = { enteredMarks: ["save_product"], confirmation: "readback" };
+    const unproven = (
+      commitsUnproven: readonly unknown[],
+      commits = ["save_product", "save_insured"],
+    ) => contract({ confirmation: "readback", commits, commitsUnproven });
+
+    it("publishes later marks the session never entered, and reports them", () => {
+      const extracted = unproven(["save_insured"]);
+      expect(check([saved], extracted).result).toEqual(
+        Exit.succeed({ extracted, declared: "readback", commitsUnproven: ["save_insured"] }),
+      );
+      // Every mark after the last entered one may be unproven, in the order commits declares.
+      const longer = unproven(
+        ["rate_quote", "save_insured"],
+        ["save_product", "save_insured", "rate_quote"],
+      );
+      expect(check([saved], longer).result).toEqual(
+        Exit.succeed({
+          extracted: longer,
+          declared: "readback",
+          commitsUnproven: ["save_insured", "rate_quote"],
+        }),
+      );
+    });
   });
 
   it("accepts any short identifier as a mark name, and still refuses one with a space", () => {
@@ -332,6 +361,59 @@ describe("a write session's publication check", () => {
       contract({ confirmation: "unverifiable", commits: ["place-order"] }),
     );
     expect(Exit.isSuccess(result) && result.value.declared).toBe("unverifiable");
+  });
+
+  describe("when the example ended in the site's own declared no, for a host that publishes on it", () => {
+    // A quote form that saves the property, then prices it. For this example the site said no
+    // before the first save, as a product it does not offer at the property's postal code.
+    const declined = Schema.Struct({
+      status: Schema.Literal("refused"),
+      reason: Schema.Literal("not_offered"),
+      site_message: Schema.String,
+    });
+    const quoted = Schema.Struct({ status: Schema.Literal("quoted"), price: Schema.String });
+    const outputSchema = contractJsonSchema(Schema.Union(quoted, declined));
+    const refusedFirst: WriteSessionMarks = {
+      enteredMarks: [],
+      action: "write",
+      possiblySent: false,
+      refused: { reason: "not_offered" },
+    };
+    const path: WritePath = {
+      steps: [
+        { commit: "save_property", does: "Saves the property on a new quote" },
+        { commit: "get_price", does: "Prices the saved quote" },
+      ],
+      ends: "The saved quote's price",
+    };
+    const allUnproven = {
+      ...contract({
+        confirmation: "message",
+        commits: ["save_property", "get_price"],
+        commitsUnproven: ["save_property", "get_price"],
+      }),
+      outputSchema,
+    };
+
+    it("publishes the whole path, every save step unproven, with the refusal as the proven outcome", () => {
+      const published = Effect.runSyncExit(
+        checkWriteSession({
+          session: { steps: [refusedFirst] },
+          step: refusedFirst,
+          extract: Effect.succeed(allUnproven),
+          writePath: path,
+          publishOnRefusal: true,
+        }),
+      );
+      expect(published).toEqual(
+        Exit.succeed({
+          extracted: allUnproven,
+          declared: "message",
+          commitsUnproven: ["save_property", "get_price"],
+          refusal: { reason: "not_offered" },
+        }),
+      );
+    });
   });
 });
 

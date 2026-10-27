@@ -11,6 +11,7 @@ import type {
 } from "../../src/destinations/autofill-step.js";
 import {
   hostAuthentication,
+  MintFailure,
   MintHarnessSnapshot,
   type MintDependencies,
   type SignInStep,
@@ -214,6 +215,16 @@ const stop: ModelResponse = {
   ],
 };
 
+/** The outcome's diagnostics that are JSON records. */
+const diagnosticsOf = (outcome: { readonly diagnostics?: readonly string[] }) =>
+  (outcome.diagnostics ?? []).flatMap((entry) => {
+    try {
+      return [JSON.parse(entry) as Record<string, unknown>];
+    } catch {
+      return [];
+    }
+  });
+
 /** The tool answer the model read for `callId`. */
 const answerTo = (request: ModelRequest | undefined, callId: string) => {
   const items = Array.isArray(request?.input) ? request.input : [];
@@ -256,6 +267,36 @@ it("ends a host_refused report as the host's refusal once the host refused a scr
     blocked: { reason: "host_refused" },
     stopReason: "host_refused",
   });
+});
+
+// A sign-in that already sent the login and never confirmed would end any other report as sign-in
+// unavailable, but a host_refused report keeps its reason: the host's own check refused the next
+// screen, and the ending says so, with which check it stood on.
+it("keeps a host_refused report as the host's refusal after an unconfirmed sign-in sent the login", async () => {
+  const site = signInSite();
+  const run = await fixture(
+    (_request, index) =>
+      [authenticate("first", "#password"), authenticate("outside", outsideForm), hostRefused("report")][
+        index
+      ] ?? stop,
+    site.dependencies,
+    { effect: "read", siteOrigin: origin },
+  );
+  const outcome = await run.run();
+  expect(site.fills()).toBe(1);
+  expect(outcome).toMatchObject({
+    build: "incomplete",
+    blocked: { reason: "host_refused" },
+    stopReason: "host_refused",
+  });
+  expect(outcome).not.toHaveProperty("recoveryReason");
+  expect(diagnosticsOf(outcome)).toContainEqual(
+    expect.objectContaining({
+      phase: "blocked",
+      reason: "host_refused",
+      hostRefusals: [{ source: "sign_in_destination" }],
+    }),
+  );
 });
 
 it("refuses a host_refused report when the only refusal was a selector the minter can correct", async () => {
@@ -339,10 +380,10 @@ it("keeps a destination refusal through a later identifier screen that passed th
   );
   const outcome = await run.run();
   // The identifier screen passed and was sent; the report still stood on the refused form and
-  // ended the build at once, as sign-in unavailable since the identifier went out unconfirmed.
+  // ended the build at once as the host's refusal, though the identifier went out unconfirmed.
   expect(site.fills()).toBe(1);
   expect(run.requests).toHaveLength(3);
-  expect(outcome).toMatchObject({ build: "incomplete", recoveryReason: "sign_in_unavailable" });
+  expect(outcome).toMatchObject({ build: "incomplete", blocked: { reason: "host_refused" } });
 });
 
 const scripted = makeMintHarnessFixture(
@@ -420,5 +461,186 @@ it.each([
   "keeps a destination refusal across a takeover from $checkpoint checkpoint",
   async ({ edit, status }) => {
     expect(await hostRefusedAfterTakeover(edit)).toEqual([expect.objectContaining({ status })]);
+  },
+);
+
+/**
+ * A takeover's host_refused report after its predecessor's host refused a sign-in step outright,
+ * having typed nothing, from the predecessor's checkpoint as `edit` leaves it: the reply, and the
+ * takeover's outcome.
+ */
+const afterRefusedSignInTakeover = async (edit: (checkpoint: Record<string, unknown>) => void) => {
+  let capture: (() => MintHarnessSnapshot) | undefined;
+  const refusedSignIn = new MintFailure({
+    code: "Unavailable",
+    authentication: {
+      phase: "credential_submit",
+      code: "CredentialTargetRefused",
+      nothingSubmitted: true,
+    },
+  });
+  const first = await scripted(
+    (turn) =>
+      Effect.asVoid(
+        Effect.either(turn.actions.execute({ ...authenticateStep, signInStep: screen("#password") })),
+      ),
+    {
+      autofillSignIn: true,
+      reviewAndExecute: () => Effect.fail(refusedSignIn),
+      agentRecovery: {
+        bindHarness: (bound) =>
+          Effect.sync(() => {
+            capture = bound;
+          }),
+        save: () => Effect.void,
+      },
+    },
+  );
+  await first.run();
+  const checkpoint = JSON.parse(JSON.stringify(capture?.())) as Record<string, unknown>;
+  edit(checkpoint);
+  const harness = Schema.decodeUnknownSync(MintHarnessSnapshot)(checkpoint);
+  const replies: unknown[] = [];
+  const takeover = await scripted(
+    (turn) =>
+      Effect.gen(function* () {
+        const reportBlocked = turn.actions.reportBlocked;
+        if (reportBlocked === undefined) throw new Error("Missing report_blocked");
+        replies.push(JSON.parse(yield* reportBlocked(hostRefusedReport)));
+      }),
+    {
+      ...signInSite().dependencies,
+      agentRecovery: { initial: { agent: freshAgent, harness }, save: () => Effect.void },
+    },
+  );
+  const outcome = await takeover.run();
+  return { checkpoint, replies, outcome };
+};
+
+// A takeover keeps which host check refused the step, and a checkpoint from an older worker, which
+// kept the refusal without it, names it `unrecorded`. A source a later release adds, which this
+// worker cannot read, restores as unrecorded too, and never fails the checkpoint's decode.
+it.each([
+  {
+    checkpoint: "this worker's",
+    edit: () => undefined,
+    recorded: { source: "sign_in_step", code: "CredentialTargetRefused" },
+  },
+  {
+    checkpoint: "an older worker's",
+    edit: (checkpoint: Record<string, unknown>) => {
+      delete checkpoint["hostRefusalSources"];
+    },
+    recorded: { source: "unrecorded" },
+  },
+  {
+    checkpoint: "a later release's",
+    edit: (checkpoint: Record<string, unknown>) => {
+      checkpoint["hostRefusalSources"] = [
+        { refusal: { source: "a_later_check", code: "LaterCode" } },
+      ];
+    },
+    recorded: { source: "unrecorded" },
+  },
+])(
+  "records the host check a host_refused ending stood on across a takeover from $checkpoint checkpoint",
+  async ({ edit, recorded }) => {
+    const { checkpoint, replies, outcome } = await afterRefusedSignInTakeover(edit);
+    expect(checkpoint["hostRefused"]).toBe(true);
+    expect(replies).toEqual([expect.objectContaining({ status: "blocked" })]);
+    expect(
+      diagnosticsOf(outcome as { readonly diagnostics?: readonly string[] }),
+    ).toContainEqual(
+      expect.objectContaining({ phase: "blocked", reason: "host_refused", hostRefusals: [recorded] }),
+    );
+  },
+);
+
+/**
+ * A takeover's reply to a host_refused report after its predecessor's host refused a sign-in step,
+ * typing nothing, and a later screen then sent the login, which nothing confirmed; from the
+ * predecessor's checkpoint as `edit` leaves it.
+ */
+const afterLoginSentTakeover = async (edit: (checkpoint: Record<string, unknown>) => void) => {
+  let capture: (() => MintHarnessSnapshot) | undefined;
+  let executions = 0;
+  const refusedSignIn = new MintFailure({
+    code: "Unavailable",
+    authentication: {
+      phase: "credential_submit",
+      code: "CredentialTargetRefused",
+      nothingSubmitted: true,
+    },
+  });
+  const first = await scripted(
+    (turn) =>
+      Effect.gen(function* () {
+        for (const field of ["#outside", "#password"])
+          yield* Effect.either(
+            turn.actions.execute({ ...authenticateStep, signInStep: screen(field) }),
+          );
+      }),
+    {
+      autofillSignIn: true,
+      reviewAndExecute: (_execution, beforeDispatch = () => Effect.void) =>
+        executions++ === 0
+          ? Effect.fail(refusedSignIn)
+          : beforeDispatch(hostAuthentication).pipe(
+              Effect.as({
+                executionId: "sign_in_sent",
+                status: "completed" as const,
+                effect: "possible" as const,
+                observations: { step: { outcome: "filled", submit: "clicked" } },
+              }),
+            ),
+      agentRecovery: {
+        bindHarness: (bound) =>
+          Effect.sync(() => {
+            capture = bound;
+          }),
+        save: () => Effect.void,
+      },
+    },
+  );
+  await first.run();
+  const checkpoint = JSON.parse(JSON.stringify(capture?.())) as Record<string, unknown>;
+  edit(checkpoint);
+  const harness = Schema.decodeUnknownSync(MintHarnessSnapshot)(checkpoint);
+  const replies: unknown[] = [];
+  const takeover = await scripted(
+    (turn) =>
+      Effect.gen(function* () {
+        const reportBlocked = turn.actions.reportBlocked;
+        if (reportBlocked === undefined) throw new Error("Missing report_blocked");
+        replies.push(JSON.parse(yield* reportBlocked(hostRefusedReport)));
+      }),
+    {
+      ...signInSite().dependencies,
+      agentRecovery: { initial: { agent: freshAgent, harness }, save: () => Effect.void },
+    },
+  );
+  await takeover.run();
+  return { checkpoint, replies };
+};
+
+// The checkpoint keeps that a login went out after the host's refusal, so a successor ends the
+// report as sign-in unavailable, as its predecessor would have; without that mark, the refusal
+// would read as the latest sign-in event and keep the report's reason.
+it.each([
+  { checkpoint: "as kept", edit: () => undefined, status: "sign_in_unavailable" },
+  {
+    checkpoint: "without the mark that a login went out since",
+    edit: (checkpoint: Record<string, unknown>) => {
+      const sources = checkpoint["hostRefusalSources"] as Record<string, unknown>[];
+      for (const source of sources) delete source["beforeSignIn"];
+    },
+    status: "blocked",
+  },
+])(
+  "ends a takeover's host_refused report after a login sent since a refused sign-in step, from the checkpoint $checkpoint",
+  async ({ edit, status }) => {
+    const { checkpoint, replies } = await afterLoginSentTakeover(edit);
+    expect(checkpoint["signInUnconfirmed"]).toBe(true);
+    expect(replies).toEqual([expect.objectContaining({ status })]);
   },
 );

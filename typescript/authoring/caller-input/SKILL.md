@@ -109,6 +109,12 @@ separately are both applied as given, even when they're far apart.
      `InvalidInput` or `InputNotApplied` to make it look untouched (writes skill).
    - A control the tool could not find, open or read, or a page that changed: `OperationFailure`,
      never `InvalidInput` or `InputNotApplied`.
+   - Prefer a fast refusal for an item the site has no record of. A tool that takes an item's
+     id, key or URL, such as a product, listing, stock or order number, treats the site's own
+     not-found or no-results page for that value as `InvalidInput`, with `field` that input and
+     the site's words quoted in the message, before any commit mark. It never throws another
+     error for that page and never waits out a timeout for controls the page won't show. This
+     holds for signed-in tools and writes too.
 
    Never pick another value for the caller, such as a near match, the page's default or the
    first option, except a value that matches several site entries equally, where the tool may

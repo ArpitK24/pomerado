@@ -8,6 +8,9 @@ import {
   type FillSlot,
 } from "../../src/destinations/autofill-step.js";
 import { fillAutofillStep } from "../../src/destinations/autofill-fill.js";
+import { runCardFill } from "../../src/destinations/card-fill.js";
+import { makeSecretHandles } from "../../src/mint/secret-handles.js";
+import { makeSignInBrowser, type SessionTyping } from "../../src/standalone/authentication.js";
 import { expectOriginsOnly, hostKeyboard, hostPage } from "./autofill-host-page.js";
 
 // A sign-in form whose own action is a script that does nothing (`javascript:`,
@@ -80,13 +83,18 @@ const serve = async (page: Page, pages: Readonly<Record<string, string>>) => {
   return { posts, requested };
 };
 
-const inspect = async (page: Page, step: AutofillStep<FillSlot> = signInStep) =>
+const inspect = async (
+  page: Page,
+  step: AutofillStep<FillSlot> = signInStep,
+  judgedBeforeTyping?: readonly string[],
+) =>
   Effect.runPromise(
     inspectAutofillStep({
       step,
       page: await hostPage(page),
       siteOrigin: site,
       authenticationOrigins: [],
+      ...(judgedBeforeTyping === undefined ? {} : { judgedBeforeTyping }),
     }),
   );
 
@@ -360,12 +368,146 @@ test("a sign-in step whose submit is a header link to a script that does nothing
   expect(posts).toEqual([]);
 });
 
+// A sign-in step that types nothing, such as a sign-in provider chooser whose links or buttons run
+// the page's own script to pick a provider, sends nothing of the login, so a script address of its
+// submit, its link's or its form's own, is not judged as a destination: the host judges the
+// control by where it sits and its other destinations, and the screen the click leads to is
+// inspected again before anything is typed there.
+const chooserStep: AutofillStep = { fields: [], submit: "#provider" };
+// The panel's form comes first: its script listens on the page's first form.
+const chooserPage = (control: string) => `<div id="panel" hidden>${scriptForm('action="/session"')}</div>
+${control}
+<script>window.chooseProvider = () => { document.getElementById('panel').hidden = false; };</script>`;
+
+for (const [name, control] of [
+  ["a link whose address runs a script", '<a id="provider" href="javascript:chooseProvider(\'corp\')">Company account</a>'],
+  [
+    "a button in a form whose script action does something",
+    '<form action="javascript:chooseProvider(\'corp\')"><button id="provider" type="submit">Company account</button></form>',
+  ],
+  [
+    "a link to a script that does nothing in a form whose script action does something",
+    `<form action="javascript:send()"><a id="provider" href="javascript:void(0)" onclick="chooseProvider('corp')">Company account</a></form>`,
+  ],
+  ["a button whose click handler runs a script", '<button id="provider" onclick="chooseProvider(\'corp\')">Company account</button>'],
+] as const)
+  test(`a sign-in step that types nothing clicks ${name}`, async ({ page }) => {
+    const { posts } = await serve(page, { [site]: chooserPage(control) });
+    const inspection = passed(await inspect(page, chooserStep));
+    const report = await fill(page, inspection, chooserStep, []);
+    expect(report).toMatchObject({ outcome: "filled", fields: [], submit: "clicked" });
+    await expect(page.locator("#username")).toBeVisible();
+    expect(posts).toEqual([]);
+  });
+
+test("a sign-in step that types nothing is refused a link whose address runs a script once something was typed on the browser", async ({
+  page,
+}) => {
+  const { posts } = await serve(page, {
+    [site]: chooserPage('<a id="provider" href="javascript:chooseProvider(\'corp\')">Company account</a>'),
+  });
+  const inspection = await inspect(page, chooserStep, [site]);
+  expect(inspection).toMatchObject({
+    outcome: "refused",
+    reason: "credential_target_refused",
+    target: "submit",
+    failureDetail: { context: { check: "destination", part: "submit_destination" } },
+  });
+  expectOriginsOnly(inspection);
+  expect(posts).toEqual([]);
+});
+
+test("a sign-in step that types nothing is refused a do-nothing link in a form whose script action does something once something was typed on the browser", async ({
+  page,
+}) => {
+  const { posts } = await serve(page, {
+    [site]: chooserPage(
+      `<form action="javascript:send()"><a id="provider" href="javascript:void(0)" onclick="chooseProvider('corp')">Company account</a></form>`,
+    ),
+  });
+  const inspection = await inspect(page, chooserStep, [site]);
+  expect(inspection).toMatchObject({
+    outcome: "refused",
+    reason: "credential_target_refused",
+    target: "submit",
+    failureDetail: { context: { check: "destination", part: "submit_destination" } },
+  });
+  expectOriginsOnly(inspection);
+  expect(posts).toEqual([]);
+});
+
+// The host's sign-in browser reads the browser's shared record of typing as it stands at each
+// inspection, so a card fill on the same browser after the sign-in browser was made counts too.
+test("a sign-in step that types nothing is refused a script link once a card fill typed on the browser", async ({
+  page,
+}) => {
+  const { posts } = await serve(page, {
+    [site]: `<label>Card number<input id="card" name="card" autocomplete="cc-number" inputmode="numeric"></label>
+${chooserPage('<a id="provider" href="javascript:chooseProvider(\'corp\')">Company account</a>')}`,
+  });
+  const host = await hostPage(page);
+  const { keyboard } = await hostKeyboard(page);
+  const typing: SessionTyping = { typed: false };
+  const signIn = makeSignInBrowser({
+    page: host,
+    keyboard,
+    siteOrigin: site,
+    authenticationOrigins: [],
+    typing,
+  });
+  const handles = makeSecretHandles();
+  const answers = handles.issue(
+    { number: { type: "secret", value: "4242424242424242" } },
+    { number: "card_number" },
+  );
+  const handle = answers["number"];
+  if (handle?.type !== "secret") throw new Error("Not a secret");
+  const filled = await Effect.runPromise(
+    runCardFill({
+      step: { fields: [{ selector: "#card", handle: handle.value }] },
+      handles,
+      page: host,
+      keyboard,
+      siteOrigin: site,
+      review: () => Effect.void,
+      // As the local host's card fill does: the browser's shared record of typing.
+      beforeTyping: () =>
+        Effect.sync(() => {
+          typing.typed = true;
+        }),
+    }),
+  );
+  expect(filled).toMatchObject({ status: "filled" });
+  expect(typing.typed).toBe(true);
+  const inspection = await Effect.runPromise(signIn.inspect(chooserStep));
+  expect(inspection).toMatchObject({
+    outcome: "refused",
+    reason: "credential_target_refused",
+    target: "submit",
+    failureDetail: { context: { check: "destination", part: "submit_destination" } },
+  });
+  expect(posts).toEqual([]);
+});
+
 for (const [name, body, step, evidence] of [
   [
-    "a sign-in step whose submit link to a script that does nothing sits in a form whose script action does something",
-    `<form action="javascript:send()">${headerLink("javascript:void(0);")}</form>`,
-    panelStep,
-    { actionOrigins: "javascript: javascript:" },
+    "a sign-in step that types nothing whose script link sits in a frame off the site",
+    `<iframe src="${otherSite}/choose"></iframe>`,
+    chooserStep,
+    { part: "frame", frameOrigin: otherSite },
+  ],
+  [
+    "a sign-in step that types nothing whose script link sits in a form that posts off the site",
+    `<form action="https://other.test/receive"><a id="provider" href="javascript:chooseProvider('corp')">Company account</a></form>`,
+    chooserStep,
+    { part: "submit_destination", actionOrigins: "https://other.test javascript:" },
+  ],
+  [
+    "a sign-in step that types a username and submits with a link whose address runs a script",
+    `<label>Email<input id="username" name="username" autocomplete="username"></label>
+<a id="provider" href="javascript:chooseProvider('corp')">Continue</a>`,
+    { fields: [{ selector: "#username", accepts: ["username"], slot: "username" }], submit: "#provider" },
+    { part: "submit_destination", actionOrigins: "javascript:" },
   ],
   [
     "a card-fill step whose submit link's own address is a script that does nothing",
@@ -376,8 +518,14 @@ ${headerLink("javascript:void(0);")}`,
   ],
 ] as const)
   test(`${name} is refused before anything is typed`, async ({ page }) => {
-    const { posts } = await serve(page, { [site]: body });
-    await expect(page.locator("a.sign-in-link")).toBeVisible();
+    const { posts } = await serve(page, {
+      [site]: body,
+      [otherSite]: chooserPage(
+        '<a id="provider" href="javascript:chooseProvider(\'corp\')">Company account</a>',
+      ),
+    });
+    const scope = body.includes("<iframe") ? page.frameLocator("iframe") : page;
+    await expect(scope.locator(step.submit ?? "")).toBeVisible();
     const inspection = await inspect(page, step);
     expect(inspection).toMatchObject({
       outcome: "refused",

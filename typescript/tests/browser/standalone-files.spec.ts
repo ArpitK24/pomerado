@@ -296,3 +296,74 @@ test("a run cannot steer a placement to another site's input or to a field that 
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+/**
+ * A read tool that downloads the statement. With `catches`, it returns its collect's failure: its
+ * name, message and dispatch.
+ */
+const collectTool = (catches: boolean) => `import { Schema } from "effect";
+import { defineOperation, FileInput } from "../runtime/index.js";
+export default defineOperation({name:"statement",input:Schema.Struct({receipt:FileInput}),output:Schema.Unknown},
+async ({kernel,sessionId,files}) => {
+  try {
+    const statement = await files.collect(() => kernel.browsers.playwright.execute(sessionId,{code:"await page.getByRole('link', { name: 'Download statement' }).click(); return true;",timeout_sec:10}));
+    return { statement };
+  } catch (error) {
+    if (!${catches}) throw error;
+    return { failed: error.name, message: error.message, dispatch: error.dispatch ?? null };
+  }
+});`;
+
+test("a download over the host's caps fails the run as the host's limit, never as the caller's input", async () => {
+  test.info().annotations.push({
+    type: "slow",
+    description: "Three native downloads through Chromium, each on a fresh page",
+  });
+  test.setTimeout(90_000);
+  const site = await startFileSite();
+  const directory = await mkdtemp(join(tmpdir(), "pomerado-files-qa-"));
+  const file = join(directory, "receipt.txt");
+  await writeFile(file, receipt);
+  const downloads = join(directory, "downloads");
+  // The statement is over one file's cap, then over what the run's own cap leaves.
+  const fileCap = { fileBytes: 16, runFiles: 10, runBytes: 1024 };
+  const runCap = { fileBytes: 1024, runFiles: 10, runBytes: 16 };
+  const tools = await Promise.all([
+    serve(site.url, downloads, { source: collectTool(true), limits: fileCap }),
+    serve(site.url, downloads, { source: collectTool(true), limits: runCap }),
+    serve(site.url, downloads, { source: collectTool(false), limits: fileCap }),
+  ]);
+  const [overFile, overRun, uncaught] = tools;
+  const call = (tool: Awaited<ReturnType<typeof serve>>) =>
+    settled(
+      tool.client,
+      tool.client.callTool({
+        name: "send_receipt",
+        arguments: { input: { receipt: pathToFileURL(file).href } },
+      }),
+    );
+  try {
+    const perFile = await call(overFile);
+    expect(perFile.structuredContent, JSON.stringify(perFile)).toMatchObject({
+      failed: "OperationFailure",
+      message: expect.stringContaining("too_large"),
+      dispatch: "unknown",
+    });
+    const perRun = await call(overRun);
+    expect(perRun.structuredContent, JSON.stringify(perRun)).toMatchObject({
+      failed: "OperationFailure",
+      message: expect.stringContaining("run_limit"),
+      dispatch: "unknown",
+    });
+    // Uncaught, the run fails as the tool's failure, and its caller is never told to fix its input.
+    const failed = await call(uncaught);
+    expect(failed.structuredContent, JSON.stringify(failed)).toMatchObject({
+      status: "failed",
+      code: "execution_failed",
+    });
+  } finally {
+    for (const tool of tools) await tool.close();
+    await site.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});

@@ -41,6 +41,7 @@ import {
   type InsertionRefusal,
 } from "./credential-keyboard.js";
 import { PageControls } from "./page-controls.js";
+import { PageNavigation, reportedNavigation } from "./sign-in-redirect.js";
 
 /** One fill call's answer: a control that moved, an empty field the host typed, or its own. */
 const FillAnswer = Schema.Union(
@@ -78,7 +79,10 @@ const FillAnswer = Schema.Union(
   Schema.Struct({
     /** `disabled`: the submit was disabled, so the call clicked nothing. */
     submit: Schema.Literal("clicked", "failed", "disabled", "none"),
+    /** A `clicked` submit the call pressed from the keyboard. */
+    via: Schema.optional(Schema.Literal("keyboard")),
     url: Schema.String,
+    navigated: Schema.optional(PageNavigation),
     controls: Schema.optional(PageControls),
   }),
   /** Another element sat over the submit and caught the click, which never reached it. */
@@ -359,6 +363,12 @@ interface CallInput {
 
 interface FillInput extends CallInput {
   readonly values: readonly string[];
+  /**
+   * Every value the host typed earlier in this sign-in on this browser, in any step: a clicked
+   * submit reports where the page went (`navigated`) only when it is set and nothing the page
+   * chose holds one of these or `values` (`reportedNavigation`). A first screen's is empty.
+   */
+  readonly typedBefore?: readonly string[];
   readonly keyboard: CredentialKeyboard;
   /** How each value is typed; `paste` by default. */
   readonly typing?: CredentialTypingMode;
@@ -526,34 +536,77 @@ const leftOnly = (answered: Either.Either<CallAnswer, Error>) =>
 const pageSent = (answered: Either.Either<CallAnswer, Error>) =>
   Either.isRight(answered) && "pageSent" in answered.right;
 
+/** A call that found a typed field empty, or a code box holding other than one character. */
+const unchecked = (answered: Either.Either<CallAnswer, Error>) =>
+  Either.isRight(answered) && "checked" in answered.right;
+
+/** A step with a code field that the host submits (see `fillAutofillStep`). */
+const codeSentBySite = (step: AutofillStep<FillSlot>) =>
+  hostSubmits(step) && step.fields.some((field) => field.slot === "code");
+
 /**
  * After a submit call of a step with a submit found its fields gone from the document the host
  * typed in (`left`, a refusal): looks again for up to `sendMs`, the step's settle wait at most
  * `pageSendMs`, in case a new document replaces it, as a form that hides itself while it sends what
- * was typed, then loads the site's answer, does. Each look only reads the page, never clicks, so a
+ * was typed, then loads the site's answer, does; so after a code step's answer that may have raced
+ * such a load (`codeSentBySite`, `first`). Each look only reads the page and never clicks, so a
  * look that fails, as one does while the page navigates, is a look lost. A look that finds the page
- * sent what was typed reports that (`page`); one that finds the fields back, or the wait's end,
- * leaves the first refusal standing.
+ * sent what was typed reports that (`page`). A look that finds the fields back leaves the first
+ * answer standing, and so does the end of the wait. After a submit call's first answer but `left`,
+ * a box that still fails its check is the screen that answer found, so the host looks again.
  */
 const awaitNewDocument = (
   input: CallInput,
   progress: FillProgress,
   call: AutofillFillCall,
-  left: Either.Either<CallAnswer, Error>,
+  first: Either.Either<CallAnswer, Error>,
   sendMs: number,
   changes: { count: number },
 ) =>
   Effect.gen(function* () {
-    if (call.kind !== "submit") return left;
+    if (call.kind !== "submit") return first;
     const since = Date.now();
     const look: AutofillFillCall = { ...call, look: true };
+    const raced = !leftOnly(first);
     while (Date.now() - since < sendMs) {
       yield* Effect.sleep(submitPollMs);
       const answered = yield* fillCall(input, progress, changes)(look);
       if (pageSent(answered)) return answered;
-      if (Either.isRight(answered) && !leftOnly(answered)) return left;
+      if (Either.isRight(answered) && !leftOnly(answered) && !(raced && unchecked(answered)))
+        return first;
     }
-    return left;
+    return first;
+  });
+
+/** How long a step with fields gives its page to send what was typed itself (`pageSendMs`). */
+const sendWindow = (input: CallInput) =>
+  input.step.fields.length > 0 ? Math.min(input.settleMs ?? 5_000, pageSendMs) : 0;
+
+/**
+ * The step's submit call, judged against the controls as the host last judged them and guarded,
+ * with `boxes`, the step's code boxes, each of which must hold exactly one character before the
+ * click. `pressCovered`, on a click again only, presses the submit from the keyboard when another
+ * element catches its click.
+ */
+const submitCall = (
+  input: CallInput,
+  progress: FillProgress,
+  boxes: readonly number[],
+  pressCovered = false,
+) =>
+  // A re-judge never changes a method, so the submission's method is the one judged now.
+  guardedSubmit(input.step, progress.judged, {
+    settleMs: input.settleMs ?? 5_000,
+    inspection: input.inspection.judgment,
+    // Once something was typed before inspection, only a secret inside an origin no page chose
+    // Is no leak: the page may have put one in any path or query.
+    exempt:
+      input.inspection.judgedBeforeTyping === undefined
+        ? null
+        : configuredOrigins(input.inspection),
+    codeBoxes: boxes,
+    alertsBefore: input.countNewAlerts === true,
+    pressCovered,
   });
 
 /**
@@ -567,12 +620,13 @@ const awaitNewDocument = (
  * the host looks again, at least once after it, even past the wait. When a later look finds the
  * page sent what was typed, the fill reports that; otherwise the first failure stands. On a step
  * with a submit whose fields are gone from the document the host typed in, the host looks again
- * without clicking (`awaitNewDocument`).
+ * without clicking (`awaitNewDocument`), as on a code step whose call raced its page
+ * (`codeSentBySite`).
  */
 const submitWhenEnabled = (input: CallInput, progress: FillProgress, call: AutofillFillCall) =>
   Effect.gen(function* () {
     const started = Date.now();
-    const sendMs = input.step.fields.length > 0 ? Math.min(input.settleMs ?? 5_000, pageSendMs) : 0;
+    const sendMs = sendWindow(input);
     const readsOnly = !hostSubmits(input.step) && sendMs > 0;
     let unsentSince: number | undefined;
     let lost: Either.Either<CallAnswer, Error> | undefined;
@@ -580,7 +634,9 @@ const submitWhenEnabled = (input: CallInput, progress: FillProgress, call: Autof
     const changes = { count: 0 };
     for (;;) {
       const answered = yield* fillCall(input, progress, changes)(call);
-      if (leftOnly(answered) && sendMs > 0)
+      const raced =
+        codeSentBySite(input.step) && (Either.isLeft(answered) || unchecked(answered));
+      if ((leftOnly(answered) || raced) && sendMs > 0)
         return yield* awaitNewDocument(input, progress, call, answered, sendMs, changes);
       const failed = readsOnly && Either.isLeft(answered);
       const unsent = unclicked(answered, "none") || failed;
@@ -691,12 +747,28 @@ const afterFieldCall = (
           input.step.fields[index]?.slot === "phone" ? { phone: true } : undefined,
         ),
       );
-      if (typing._tag === "Left")
-        return failedCall(progress, typing.left, {
+      if (typing._tag === "Left") {
+        const lost = failedCall(progress, typing.left, {
           held: input.values,
           mayMutate: true,
           typing: true,
         });
+        if (index < input.step.fields.length - 1 || !codeSentBySite(input.step)) return lost;
+        // The page may have sent the code on this last digit (`codeSentBySite`).
+        progress.typedIn = answer.document;
+        const looked = yield* awaitNewDocument(
+          input,
+          progress,
+          submitCall(input, progress, []),
+          Either.left(typing.left),
+          sendWindow(input),
+          { count: 0 },
+        );
+        if (Either.isLeft(looked) || !("pageSent" in looked.right)) return lost;
+        progress.typed = true;
+        progress.statuses.push("filled");
+        return filledReport(input.step, progress, "page", looked.right.url);
+      }
       if (typing.right === "inserted") {
         progress.typed = true;
         progress.typedIn = answer.document;
@@ -730,14 +802,16 @@ const afterFieldCall = (
  * fails that field, and one refused before the click, or a submission refused as it fires, refuses
  * the submit. That click ran, though, so the report says so (`clicked`): the page's own handlers
  * ran on it, and what the step filled may have gone out. A submit the page keeps disabled is never
- * clicked: the host waits for the page to enable it once the fields are filled, and when it stays
- * disabled the report says so (`stayed_disabled`). A step whose code the host typed one character
- * per box into several code fields is submitted only once every box holds exactly one character;
- * otherwise that box fails and the submit is not attempted. A phone field is read back once typed
- * (`InsertionOptions.phone`): one that kept other digits than the number, as under a country picker
- * set to another country, is `changed`, and the fill types nothing more and never clicks the
- * submit. On a step with fields and no submit, a
- * page that moves on once every field is typed sent what was typed itself (`page`), never a refusal:
+ * clicked: the host waits for the page to enable it once the fields are filled. When it stays
+ * disabled after the host typed a field, the host types every field again key by key
+ * (`InsertionOptions.keys`), for a page that enables it only on key presses, and waits once more.
+ * When it still stays disabled the report says so (`stayed_disabled`). A step whose code the host
+ * typed one character per box into several code fields is submitted only once every box holds
+ * exactly one character; otherwise that box fails and the submit is not attempted. A phone field is
+ * read back once typed (`InsertionOptions.phone`): one that kept other digits than the number, as
+ * under a country picker set to another country, is `changed`, and the fill types nothing more and
+ * never clicks the submit. On a step with fields and no submit, a page that moves on once every
+ * field is typed sent what was typed itself (`page`), never a refusal:
  * the step's fields went away or were all disabled, its popup closed, its address moved to another
  * path, or a step of several fields came back emptied. The host gives the page up to `pageSendMs`
  * to do so, and a submit call that fails meanwhile is followed by another look (`submitWhenEnabled`).
@@ -746,13 +820,19 @@ const afterFieldCall = (
  * with it, before the click or within `pageSendMs` of a look that found them gone: the page sent
  * the form itself (`page`, `screenGone`, `awaitNewDocument`), and the host clicks nothing. A form
  * that locks, redraws itself or changes its address with pushState has sent nothing, and the host
- * waits on it or refuses as before.
+ * waits on it or refuses as before. A code step gets the same looks once every box is typed, when
+ * its submit call finds a box empty or fails, or the last box's typing loses its answer, as when
+ * its page sends the code itself on the last digit and loads a new document while the host checks
+ * the boxes (`codeSentBySite`). Its fields gone with a new document within `pageSendMs` is `page`,
+ * with every box filled; else the report is as it would have been.
  * Guardian's refusals still come first: a control that moved off the site or changed how it
  * submits refuses the submit as before.
  * A step that names `dismiss` clicks that covering notice's own control first, when the page shows
  * it, and refuses the step with nothing typed when it is no such control (`dismissNotice`). A
  * click another element caught, which never reached the submit, is `blocked`, with that element
- * (`blockedBy`): nothing was sent and the fields still hold what was typed. On a step that names
+ * (`blockedBy`): nothing was sent and the fields still hold what was typed, so the minter can name
+ * the element's own control as `dismiss` and send the screen again (`resubmitAutofillStep`), which
+ * presses the submit from the keyboard only when its click is caught again. On a step that names
  * `dismiss`, a notice drawn only once the fields were typed is dismissed then, and the submit
  * clicked once more, with nothing typed again. A click that ran out of time while the next page
  * loaded, as one through a slow chain of redirects does, is `clicked` once a request for the page's
@@ -784,22 +864,33 @@ export const fillAutofillStep = (input: FillInput): Effect.Effect<AutofillStepRe
       if (ended !== undefined) return ended;
     }
     const boxes = codeBoxes(step, input.values);
-    const report = yield* submitStep(input, progress, boxes);
+    const typed =
+      input.typedBefore === undefined ? undefined : [...input.typedBefore, ...input.values];
+    const typeAgain = (fill: FillInput) =>
+      Effect.gen(function* () {
+        progress.statuses.length = 0;
+        progress.check = [];
+        for (let index = 0; index < step.fields.length; index++) {
+          const ended = yield* fillField(fill, progress, index);
+          if (ended !== undefined) return ended;
+        }
+        return yield* submitStep(fill, progress, boxes, typed);
+      });
+    const report = yield* submitStep(input, progress, boxes, typed);
+    // The page may enable its submit only on key presses: the host types every field again by keys.
+    if (
+      report.outcome === "filled" &&
+      report.submit === "stayed_disabled" &&
+      typedFields(step, progress).length > 0
+    )
+      return yield* typeAgain({ ...input, keyboard: byKeys(input.keyboard) });
     if (!isBlocked(report) || step.dismiss === undefined) return report;
     const again = yield* dismissNotice(input, progress);
-    if (again.emptied) {
-      // The dismiss emptied the fields before its click: the host types them all again.
-      progress.statuses.length = 0;
-      progress.check = [];
-      for (let index = 0; index < step.fields.length; index++) {
-        const ended = yield* fillField(input, progress, index);
-        if (ended !== undefined) return ended;
-      }
-      return yield* submitStep(input, progress, boxes);
-    }
+    // The dismiss emptied the fields before its click: the host types them all again.
+    if (again.emptied) return yield* typeAgain(input);
     if (!again.dismissed) return report;
     progress.check = typedFields(step, progress);
-    return yield* submitStep(input, progress, boxes);
+    return yield* submitStep(input, progress, boxes, typed);
   });
 
 /**
@@ -810,7 +901,11 @@ export const fillAutofillStep = (input: FillInput): Effect.Effect<AutofillStepRe
  * fill typed must still hold something (lengths only, never a value), and each box of a code split
  * across one-character boxes exactly one character, or that field fails and the submit is not
  * attempted; otherwise the submit is judged, guarded and clicked as the fill's own was, and the
- * report says what became of it, `blocked` again included.
+ * report says what became of it. A click another element catches again, as one the dismiss did not
+ * clear or one with nothing to dismiss, such as a fixed footer, is pressed from the keyboard
+ * instead: the host focuses that same submit and presses Enter on it, only once focus landed on it,
+ * under the same guard, and reports it `clicked` with `via: "keyboard"`; the element over it is
+ * never clicked. When focus goes anywhere else it is `blocked` again.
  */
 export const resubmitAutofillStep = (input: CallInput): Effect.Effect<AutofillStepReport> =>
   Effect.gen(function* () {
@@ -833,8 +928,19 @@ export const resubmitAutofillStep = (input: CallInput): Effect.Effect<AutofillSt
     if (notice.refusal !== undefined) return notice.refusal;
     progress.check = typedFields(step, progress);
     const codeFields = step.fields.flatMap((field, index) => (field.slot === "code" ? [index] : []));
-    return yield* submitStep(input, progress, codeFields.length > 1 ? codeFields : []);
+    return yield* submitStep(
+      input,
+      progress,
+      codeFields.length > 1 ? codeFields : [],
+      undefined,
+      true,
+    );
   });
+
+/** The keyboard, typing each value key by key (`InsertionOptions.keys`). */
+const byKeys = (keyboard: CredentialKeyboard): CredentialKeyboard => ({
+  insertText: (target, text, options) => keyboard.insertText(target, text, { ...options, keys: true }),
+});
 
 /** The first of the step's selectors that reaches into another frame, its `dismiss` included. */
 const crossingSelector = (step: AutofillStep<FillSlot>) =>
@@ -898,27 +1004,25 @@ const dismissNotice = (
 /**
  * The step's submit, judged again, guarded and clicked once every field was typed
  * (`submitWhenEnabled`), and what became of it. `boxes` are the step's code boxes, each of which
- * must hold exactly one character before the click.
+ * must hold exactly one character before the click. A clicked submit reports where the page went
+ * (`navigated`, `reportedNavigation`) only when `typed`, every value the sign-in typed on this
+ * browser, is known: a click again, or a fill whose host did not say what it typed before
+ * (`typedBefore`), never reports it. `pressCovered`, on a click again only, presses the submit from
+ * the keyboard when another element catches its click.
  */
-const submitStep = (input: CallInput, progress: FillProgress, boxes: readonly number[]) =>
+const submitStep = (
+  input: CallInput,
+  progress: FillProgress,
+  boxes: readonly number[],
+  typed: readonly string[] | undefined,
+  pressCovered = false,
+) =>
   Effect.gen(function* () {
     const { step } = input;
-    // A re-judge never changes a method, so the submission's method is the one judged now.
     const clicked = yield* submitWhenEnabled(
       input,
       progress,
-      guardedSubmit(step, progress.judged, {
-        settleMs: input.settleMs ?? 5_000,
-        inspection: input.inspection.judgment,
-        // Once something was typed before inspection, only a secret inside an origin no page chose
-        // Is no leak: the page may have put one in any path or query.
-        exempt:
-          input.inspection.judgedBeforeTyping === undefined
-            ? null
-            : configuredOrigins(input.inspection),
-        codeBoxes: boxes,
-        alertsBefore: input.countNewAlerts === true,
-      }),
+      submitCall(input, progress, boxes, pressCovered),
     );
     if (clicked._tag === "Left")
       return failedCall(progress, clicked.left, { mayMutate: hostSubmits(step) });
@@ -952,6 +1056,19 @@ const submitStep = (input: CallInput, progress: FillProgress, boxes: readonly nu
           ...foundEvidence(answer.url, undefined, evidenceOrigins(input, progress)),
         }),
       );
-    const report = filledReport(step, progress, answer.submit, answer.url);
-    return answer.controls === undefined ? report : { ...report, controls: answer.controls };
+    const navigated =
+      answer.submit !== "clicked" || answer.navigated === undefined || typed === undefined
+        ? undefined
+        : reportedNavigation({
+            page: answer.navigated,
+            url: answer.url,
+            typed,
+            trusted: [input.inspection.siteOrigin, ...input.inspection.authenticationOrigins],
+          });
+    return {
+      ...filledReport(step, progress, answer.submit, answer.url),
+      ...(answer.via === undefined ? {} : { via: answer.via }),
+      ...(navigated === undefined ? {} : { navigated }),
+      ...(answer.controls === undefined ? {} : { controls: answer.controls }),
+    };
   });

@@ -158,7 +158,7 @@ it("refuses a record of accepted confirms it cannot trust", () =>
   }));
 
 it.each([
-  [{ ...signIn.recipe, version: 8 }, "unknown_version"],
+  [{ ...signIn.recipe, version: 9 }, "unknown_version"],
   [{ ...signIn.recipe, steps: [] }, "invalid"],
   ["not json", "invalid"],
   [undefined, "missing"],
@@ -264,10 +264,10 @@ it("merges a sign-in's origins into deployment.json after the request's own", as
 it("refuses a recipe it cannot read before writing it", () =>
   scratch(async (directory) => {
     const written = run(
-      writeArtifact(directory, { ...source, signIn: { ...signIn, recipe: { ...signIn.recipe, version: 8 } } } as never),
+      writeArtifact(directory, { ...source, signIn: { ...signIn, recipe: { ...signIn.recipe, version: 9 } } } as never),
     );
     // The artifact's schema refuses the recipe's version, so nothing is written.
-    await expect(written).rejects.toThrow(/\["recipe"\][\s\S]*Expected 1 \| 2 \| 3 \| 4 \| 5 \| 6 \| 7, actual 8/);
+    await expect(written).rejects.toThrow(/\["recipe"\][\s\S]*Expected 1 \| 2 \| 3 \| 4 \| 5 \| 6 \| 7 \| 8, actual 9/);
     expect(await readdir(directory)).toEqual([]);
   }));
 

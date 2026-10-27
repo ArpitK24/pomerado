@@ -127,7 +127,7 @@ export const unansweredFailure = ({ cause: unanswered }: Unanswered) =>
 
 const filledNotices = {
   blocked:
-    "The host filled the fields, but another element sat over the submit and caught its click (blockedBy), such as a cookie or tracking consent banner, so nothing was sent and no fill was spent. Never click the submit yourself. Find that banner's own control with a read-only explore (never read a field the host filled): its close or dismiss control, else one that rejects or declines what is not essential, else accept when that is the only way out. Then send this same signInStep again with that control's selector as dismiss: the host clicks it, then clicks the submit once more, typing nothing unless the dismiss emptied a field.",
+    "The host filled the fields, but another element sat over the submit and caught its click (blockedBy), such as a cookie or tracking consent banner, so nothing was sent and no fill was spent. Never click the submit yourself. Find that banner's own control with a read-only explore (never read a field the host filled): its close or dismiss control, else one that rejects or declines what is not essential, else accept when that is the only way out. Then send this same signInStep again with that control's selector as dismiss: the host clicks it, then clicks the submit once more, typing nothing unless the dismiss emptied a field. When that element has no such control, such as a fixed header or footer, send this same signInStep again without dismiss, and without resizing or scrolling the page: the host then presses the submit from the keyboard.",
   failed:
     "The host filled the fields, but its click of the submit failed. You may click that one submit yourself in an explore, and nothing else: never read, change or return a field the host filled. Then continue with the next signInStep, or signedIn.",
   none: "The host filled the fields; the screen has no button. Explore read-only to see what it revealed, then send the next signInStep for it.",
@@ -200,6 +200,10 @@ export const lostTypingNotice =
 export const dismissRefusedNotice =
   "The step's dismiss is not a covering notice's own control: it is or holds a control of the sign-in, opens another page, matches more than one visible element, or sits in the sign-in's form or submits a form outside a notice that covers the step's controls. The host typed and clicked nothing. Send the step again with the notice's own close or dismiss control as dismiss, else one that rejects or declines what is not essential, else its accept control, or without dismiss.";
 
+/** After a step whose covered submit the host pressed from the keyboard (`via: "keyboard"`). */
+export const keyboardSubmitNotice =
+  "Something sat over the submit and caught the host's click, so the host pressed the same submit from the keyboard instead, and nothing on the covering element was clicked. Explore read-only to read the next screen (never read a field the host filled), then send its signInStep, or signedIn.";
+
 /** After a step whose submit key the host pressed. */
 const keyNotices = {
   failed:
@@ -223,5 +227,6 @@ export const stepNotice = (
     (stepReport.submit === "failed" || stepReport.submit === "clicked")
   )
     return keyNotices[stepReport.submit];
+  if (stepReport.via === "keyboard") return keyboardSubmitNotice;
   return filledNotices[stepReport.submit];
 };

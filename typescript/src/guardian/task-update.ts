@@ -178,7 +178,7 @@ export const taskUpdateForReview = <E>(
         : { suggestedRequest: yield* text(update.suggestedRequest) }),
       confirmation: facts.confirmation,
       effect: facts.effect,
-      // Finite host metadata, written by the harness: nothing to screen.
+      // Written by the harness, which screened each instruction: nothing to screen.
       ...(facts.publicationDecisions === undefined || facts.publicationDecisions.length === 0
         ? {}
         : { publicationDecisions: facts.publicationDecisions }),

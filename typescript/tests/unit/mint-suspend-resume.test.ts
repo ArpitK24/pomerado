@@ -557,6 +557,60 @@ it("offers the host a build its minter ends on a handed-back question, and resum
   expect(JSON.stringify(rejoined)).toContain("Annual");
 });
 
+/** A takeover's host rejoins the started question and finds it expired, unanswered. */
+const expiredRejoin = () =>
+  Effect.fail(new MintFailure({ code: "Unavailable", noResponse: { possibleCommit: false } }));
+
+/**
+ * A takeover restores the suspended build's last checkpoint, whose question is still started, and
+ * its host's rejoin of that question finds it expired.
+ */
+const takeover = async (
+  suspended: Awaited<ReturnType<typeof suspendedBuild>>,
+  overrides: Partial<MintDependencies>,
+) => {
+  const checkpoint = suspended.store.checkpoints.at(-1);
+  if (checkpoint === undefined) throw new Error("No checkpoint");
+  return fixture(() => prose(), {
+    model: makeOpenAIMinter(
+      suspended.model.provider,
+      "medium",
+      {},
+      { recoveryFactory: suspended.store.factory(checkpoint.agent) },
+    ),
+    agentRecovery: { save: suspended.store.save, initial: checkpoint, recoverTool: expiredRejoin },
+    ...overrides,
+  });
+};
+
+// Fails when a takeover's rejoined question that expired unanswered fails the model run, which
+// ends the build with no recorded cause, instead of being offered for a suspension.
+it("offers the host a takeover's rejoined question that expired unanswered", async () => {
+  const suspended = await suspendedBuild();
+  const offered: UnansweredQuestion[] = [];
+  const resumed = await takeover(suspended, {
+    websiteCredentialsAvailable: true,
+    suspendUnanswered: (unanswered) =>
+      Effect.sync(() => {
+        offered.push(unanswered);
+        return "suspended" as const;
+      }),
+  });
+
+  const ended = await resumed.run().then(
+    () => undefined,
+    (error: unknown) => error,
+  );
+  expect(interrupted(ended)).toBe(true);
+  // The harness never learned the replayed question's id: the host knows which one it rejoined.
+  expect(offered).toEqual([{ step: "question", possibleCommit: false }]);
+  // The call stays started for the next resume, and no further model call was made.
+  expect(suspended.model.requests).toHaveLength(1);
+  const last = suspended.store.checkpoints.at(-1);
+  expect(last?.agent.tools).toEqual([expect.objectContaining({ callId: "ask", state: "started" })]);
+  expect(last?.harness.noResponse).toBeUndefined();
+});
+
 const request = {
   mode: "mint",
   intent: "Read public data",

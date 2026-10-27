@@ -112,3 +112,14 @@ export type SubmitKey = typeof SubmitKey.Type;
 /** An off-page sign-in the owner completes before confirming through the protected input. */
 export const AutofillApproval = Schema.Literal("email_link", "device");
 export type AutofillApproval = typeof AutofillApproval.Type;
+
+/**
+ * The number a device approval's screen shows for the owner to pick on their device, as its
+ * `matchSelector` element's trimmed text: 1 to 3 digits, else no number reaches the owner.
+ */
+export const approvalNumberPattern = /^[0-9]{1,3}$/u;
+/** The element text as an approval number, when it is one (`approvalNumberPattern`). */
+export const approvalNumberOf = (text: string | undefined) => {
+  const trimmed = text?.trim();
+  return trimmed !== undefined && approvalNumberPattern.test(trimmed) ? trimmed : undefined;
+};

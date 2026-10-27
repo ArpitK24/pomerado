@@ -17,7 +17,13 @@ import type { WriteDeclaration } from "./operation.js";
 import { kernelTimeoutSec } from "./kernel-execute-client.js";
 import type { KernelExecuteClient } from "./kernel-execute-client.js";
 import { inspectSignInRejection } from "./sign-in-rejection.js";
-import { FileField, FileRefused, type FileChannel, type ScriptFiles } from "./files.js";
+import {
+  FileField,
+  FileRefused,
+  type FileChannel,
+  type FileRefusalReason,
+  type ScriptFiles,
+} from "./files.js";
 import type { SignInRejectionMarker } from "./sign-in-rejection.js";
 import type { ListHost } from "./list-host.js";
 import { ScriptCardFillAnswer, ScriptCardFillRequest } from "./script-card-fill.js";
@@ -324,7 +330,7 @@ interface ScriptBrowser {
 /** The default wait for a download to finish after its trigger. */
 export const downloadWaitMs = 30_000;
 
-/** Refusals the caller's file causes, which the caller fixes with another file. */
+/** Refusals the caller's file causes when placed, which the caller fixes with another file. */
 const callerFileReasons: ReadonlySet<string> = new Set([
   "too_large",
   "run_limit",
@@ -332,6 +338,15 @@ const callerFileReasons: ReadonlySet<string> = new Set([
   "executable",
   "not_accepted",
 ]);
+
+/**
+ * A download the host refused over its size caps, as the script's failure: the page made the
+ * file, so it is the host's limit, never the caller's input, and the message names the cap.
+ */
+const downloadCapFailures: Partial<Record<FileRefusalReason, string>> = {
+  too_large: "The downloaded file is over the host's size limit for one file (too_large)",
+  run_limit: "The downloaded file is over the host's limit for one run's files (run_limit)",
+};
 
 /**
  * A file refusal, or the host's file service failing, as the script's own failure: the caller's
@@ -415,6 +430,10 @@ const scriptFiles = (
       try {
         return await settle(files.collect({ slot, timeoutMs }));
       } catch (error) {
+        const overCap =
+          error instanceof FileRefused ? downloadCapFailures[error.reason] : undefined;
+        if (overCap !== undefined)
+          throw new OperationFailure(overCap, { cause: error, dispatch: "unknown" });
         throw fileFailure(error, true);
       }
     },

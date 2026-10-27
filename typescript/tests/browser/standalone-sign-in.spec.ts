@@ -2110,7 +2110,7 @@ test("a recipe of a version this host does not know is refused before the run si
       endpoint,
       answers(asked),
       accountReader({
-        recipe: { ...loginRecipe(shop.origin), version: 8 },
+        recipe: { ...loginRecipe(shop.origin), version: 9 },
         entryUrl: `${shop.origin}/login`,
       }),
       `${shop.origin}/account`,

@@ -958,6 +958,41 @@ it("keeps a host refusal a later finish_build got past cleared across a takeover
   ]);
 });
 
+// A takeover reads the latest host refusal from the checkpoint's sources, so one whose instruction
+// names its fix still sends the first host_refused report back to that step. A checkpoint from an
+// older worker, which kept the refusal without its source, decodes as before and grants the ending.
+it.each([
+  {
+    checkpoint: "this worker's",
+    edit: () => undefined,
+    reply: { status: "blocked_refused", reason: "host_refusal_names_step" },
+  },
+  {
+    checkpoint: "an older worker's",
+    edit: (checkpoint: Record<string, unknown>) => {
+      delete checkpoint["hostRefusalSources"];
+    },
+    reply: { status: "blocked" },
+  },
+  // A sign-in screen the host refused at its destination check stands beside the named step, so
+  // the report is taken at once.
+  {
+    checkpoint: "this worker's, with a sign-in screen refused at its destination,",
+    edit: (checkpoint: Record<string, unknown>) => {
+      checkpoint["signInDestinationRefused"] = true;
+    },
+    reply: { status: "blocked" },
+  },
+])(
+  "sends host_refused back to a named step across a takeover from $checkpoint checkpoint",
+  async ({ edit, reply }) => {
+    const replies = await hostRefusedAfterTakeover(edit, [
+      new MintFailure({ code: "PublicationUnavailable", reason: "variants_unsupported" }),
+    ]);
+    expect(replies).toEqual([expect.objectContaining(reply)]);
+  },
+);
+
 /**
  * The reply to a takeover's site_declined report after its predecessor sent a sign-in that nothing
  * confirmed, from the predecessor's checkpoint as `edit` leaves it.
@@ -1422,6 +1457,47 @@ it("keeps the build open when publication's capture evidence is unavailable, the
   expect(f.seen).toHaveLength(1);
 });
 
+// A host that publishes on the site's own no (`publishOnRefusal`) marks the session's
+// `write_not_submitted` refusal, and the minter hears how to publish on that no instead of only
+// being told to continue the write; an unmarked refusal keeps today's instruction.
+it("tells the minter how to publish on the site's own no only when the host publishes on one", async () => {
+  const answers: unknown[] = [];
+  let publications = 0;
+  const f = await fixture(
+    (turn) =>
+      Effect.gen(function* () {
+        yield* turn.actions.execute(execution);
+        answers.push(JSON.parse(yield* turn.actions.finish(publication)));
+        answers.push(JSON.parse(yield* turn.actions.finish(publication)));
+        answers.push(JSON.parse(yield* turn.actions.finish(publication)));
+      }),
+    {
+      publish: () =>
+        Effect.suspend(() =>
+          publications++ < 2
+            ? Effect.fail(
+                new MintFailure({
+                  code: "PublicationUnavailable",
+                  reason: "write_not_submitted",
+                  ...(publications === 1 ? { publishesOnRefusal: true as const } : {}),
+                }),
+              )
+            : Effect.succeed({ publicationRef: "published-revision", diagnostics: [] }),
+        ),
+    },
+  );
+  expect(await f.run()).toMatchObject({ build: "published" });
+  const [marked = "", unmarked = ""] = answers.map((answer) =>
+    String(Reflect.get(Object(answer), "instruction")),
+  );
+  expect(marked).toContain("write.commitsUnproven");
+  expect(unmarked).not.toContain("write.commitsUnproven");
+  // Past the added rule, both say the same.
+  expect(marked.endsWith(unmarked.slice(unmarked.indexOf(" the remaining authorized work")))).toBe(
+    true,
+  );
+});
+
 // Each publication decision reaches the host as typed evidence, and the minter's answer names it.
 it("records each publication decision, refused and published, through the host's hook", async () => {
   const recorded: PublicationDecision[] = [];
@@ -1466,6 +1542,8 @@ it("records each publication decision, refused and published, through the host's
       decidedAt: expect.any(Number),
       failedChecks: ["write_not_submitted"],
       recovery: "write_completion",
+      // Whole, so a review reads the instruction's last step too.
+      instruction: Reflect.get(Object(answers[0]), "instruction"),
     },
     {
       decisionId: expect.any(String),
@@ -2112,6 +2190,48 @@ it("gives a later question review a refused-outcome publication as a revision, n
   await f.run();
   expect(reviewed).toEqual([
     expect.objectContaining({ outcome: "refused", recovery: "correct_source" }),
+  ]);
+});
+
+// A question review saw a publication refusal only as its code, reason, checks and recovery, so it
+// refused a question that relied on what the refusal's instruction requires.
+it("gives a later question review the instruction each publication refusal carried", async () => {
+  const recorded: PublicationDecision[] = [];
+  const reviewed: PublicationDecision[] = [];
+  let refusal: unknown;
+  const f = await fixture(
+    (turn) =>
+      Effect.gen(function* () {
+        yield* turn.actions.execute({ ...execution, purpose: "act" });
+        refusal = JSON.parse(yield* turn.actions.finish(publication));
+        yield* turn.actions.requestInput(textQuestion("May the refusal use a short code?"));
+      }),
+    {
+      publicationDecisions: {
+        record: (decision) =>
+          Effect.sync(() => {
+            recorded.push(decision);
+          }),
+        list: Effect.sync(() => recorded),
+      },
+      publish: () =>
+        Effect.fail(
+          new MintFailure({ code: "PublicationUnavailable", reason: "refusal_unreadable" }),
+        ),
+      reviewQuestion: (_request, options) =>
+        Effect.sync(() => {
+          reviewed.push(...(options?.publicationDecisions ?? []));
+          return { outcome: "allow_business" as const, rationale: "Plain." };
+        }),
+    },
+  );
+  await f.run({ ...request, effect: "write" });
+  expect(refusal).toMatchObject({ reason: "refusal_unreadable", instruction: expect.any(String) });
+  expect(reviewed).toEqual([
+    expect.objectContaining({
+      reason: "refusal_unreadable",
+      instruction: Reflect.get(Object(refusal), "instruction"),
+    }),
   ]);
 });
 

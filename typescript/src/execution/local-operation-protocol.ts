@@ -115,6 +115,7 @@ const JournalFields = {
 const WriteDeclaration = Schema.Struct({
   confirmation: Schema.Literal("message", "readback", "unverifiable"),
   commits: Schema.optionalWith(Schema.Array(Schema.String), { exact: true }),
+  commitsUnproven: Schema.optionalWith(Schema.Array(Schema.String), { exact: true }),
 });
 export const LocalOperationMessage = Schema.Union(
   Schema.Struct({

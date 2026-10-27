@@ -94,6 +94,17 @@ export interface AutofillHooks<E = unknown, V extends string = string> {
     popup?: AutofillStep["popup"],
   ) => Effect.Effect<boolean, E>;
   /**
+   * The number a device approval's screen shows for the owner to pick on their device: the trimmed
+   * text of the first visible element `selector` names on the screen's page, or undefined. The
+   * shared code keeps it only when it is 1 to 3 digits (`approvalNumberOf`). A host without it
+   * asks for the approval with no number.
+   */
+  readonly approvalNumber?: (
+    selector: string,
+    screenPage: string,
+    popup?: AutofillStep["popup"],
+  ) => Effect.Effect<string | undefined, E>;
+  /**
    * Lets a replay that sent the login cleanly and ended on a page that can't tell, such as an
    * account picker the site shows before the marker, go on signed in. A host may check the
    * identifiers the sign-in used, binding nothing. Absent, such a replay fails its sign-in check.
@@ -162,6 +173,8 @@ export interface SecurityAnswerFills {
 interface AutofillRecordedStep {
   readonly popup?: AutofillRecipeStep["popup"];
   readonly approval?: AutofillRecipeStep["approval"];
+  /** A device approval's element that shows the number the owner picks on their device. */
+  readonly matchSelector?: string;
   readonly rejectedMarkers?: AutofillRecipeStep["rejectedMarkers"];
   /**
    * With each identifier field's accepted, held and sent kinds, never a value, and what named each
@@ -172,6 +185,8 @@ interface AutofillRecordedStep {
   /** The key the host pressed in the last field to submit its form, on a form with no submit. */
   readonly submitKey?: AutofillRecipeStep["submitKey"];
   readonly submittedBy?: "host" | "minter";
+  /** `keyboard` once the host pressed the screen's covered submit from the keyboard. */
+  readonly submitVia?: AutofillRecipeStep["submitVia"];
   /** A two-factor method choice's recorded methods. */
   readonly methods?: AutofillRecipeStep["methods"];
   /** The password an earlier screen took that this one asked for again beside a second factor. */
@@ -183,15 +198,16 @@ interface AutofillRecordedStep {
 }
 
 /**
- * A screen's popup, how it submits and the covering notice's control it dismisses, which a step
- * rebuilt for that screen keeps.
+ * A screen's popup, how it submits, from the keyboard included, and the covering notice's control
+ * it dismisses, which a step rebuilt for that screen keeps.
  */
 export const screenSubmit = (
-  screen: Pick<AutofillStep, "popup" | "submit" | "submitKey" | "dismiss">,
+  screen: Pick<AutofillStep, "popup" | "submit" | "submitKey" | "submitVia" | "dismiss">,
 ) => ({
   ...(screen.popup === undefined ? {} : { popup: screen.popup }),
   ...(screen.submit === undefined ? {} : { submit: screen.submit }),
   ...(screen.submitKey === undefined ? {} : { submitKey: screen.submitKey }),
+  ...(screen.submitVia === undefined ? {} : { submitVia: screen.submitVia }),
   ...(screen.dismiss === undefined ? {} : { dismiss: screen.dismiss }),
 });
 
@@ -485,8 +501,9 @@ export const noteRefill = (state: AutofillSignInState) => {
 /**
  * Records what a fill did once it returns: a field it did not fill is not held as filled, nor a
  * saved security answer typed, a step that reached nothing leaves the recipe, a step the host
- * clicked records it, and one whose click another element caught is the open sign-in's `blocked`
- * screen. Returns whether anything reached the page.
+ * clicked records it, with `submitVia` when it pressed the submit from the keyboard, and one whose
+ * click another element caught is the open sign-in's `blocked` screen. Returns whether anything
+ * reached the page.
  */
 export const recordStep = (
   state: AutofillSignInState,
@@ -508,7 +525,13 @@ export const recordStep = (
   const last = state.steps.at(-1);
   if (!reached && submit !== "clicked" && submit !== "uncertain") state.steps.pop();
   else if (submit === "clicked" && last)
-    state.steps[state.steps.length - 1] = { ...last, submittedBy: "host" };
+    state.steps[state.steps.length - 1] = {
+      ...last,
+      submittedBy: "host",
+      ...(stepReport.outcome === "filled" && stepReport.via !== undefined
+        ? { submitVia: stepReport.via }
+        : {}),
+    };
   return reached || submit === "clicked" || submit === "uncertain";
 };
 

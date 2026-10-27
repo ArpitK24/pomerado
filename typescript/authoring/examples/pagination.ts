@@ -290,3 +290,97 @@ export const readRooms = defineOperation(
     return { rooms: page.rows, ...page.output };
   },
 );
+
+const Item = Schema.Struct({
+  id: Schema.NonEmptyTrimmedString.annotations({ description: "The item's ID on the site" }),
+  name: Schema.NonEmptyTrimmedString.annotations({ description: "The item's name" }),
+  maker: Schema.NonEmptyTrimmedString.annotations({ description: "The item's maker, from its own page" }),
+});
+type Item = typeof Item.Type;
+
+/** The light rows one read of the list leaves: each row's key, name and link to its own page. */
+const LightRows = Schema.Struct({
+  rows: Schema.Array(Schema.Struct({ id: Schema.NonEmptyTrimmedString, name: Schema.NonEmptyTrimmedString, href: Schema.String })),
+  more: Schema.Boolean,
+});
+type LightRow = (typeof LightRows.Type)["rows"][number];
+type LightRead = typeof LightRows.Type & { readonly hasNext: boolean };
+
+// Rows whose fields come from each row's own detail page, on a list the site shows whole on one
+// page (`offset`). `readList` reads only the light rows the list itself shows, keyed as usual, and
+// the tool then opens the detail page only for each row `readList` returned. Avoid opening a
+// detail page inside `open` or `more`: `readList` asks them for every row from the start of the
+// list up to the cursor's position, so a later page would open every earlier row's page again.
+// Adapt every role, name and attribute from your own session's evidence.
+export const readItemDetails = defineOperation(
+  {
+    name: "list_item_details",
+    input: Schema.Struct({ ...listInputFields }),
+    output: Schema.Struct({
+      items: Schema.Array(Item).annotations({ description: "Items in the site's order" }),
+      ...listOutputFields,
+    }),
+  },
+  async ({ kernel, sessionId, siteOrigin, siteDomain, input, remainingMs, errors }) => {
+    const list = startList(input, { mechanism: "offset" });
+    if (siteOrigin === undefined)
+      throw new errors.OperationFailure("No site origin for a live run", { dispatch: "not_sent" });
+    const run = async (code: string): Promise<unknown> => {
+      const timeoutSec = Math.min(60, Math.floor(remainingMs() / 1_000) - 1);
+      if (timeoutSec < 1) throw new errors.OperationFailure("No time left to read the items");
+      const answer = await kernel.browsers.playwright.execute(sessionId, {
+        timeout_sec: timeoutSec,
+        code: `
+${waitCode}
+// The site's own requests, on every host of its domain, count as progress.
+const site = ${JSON.stringify(siteDomain === undefined ? {} : { siteDomain })};
+${code}`,
+      });
+      if (!answer.success)
+        throw new errors.OperationFailure(String(answer.error), { stderr: answer.stderr });
+      return answer.result;
+    };
+    const navigate = (url: string) =>
+      `await page.goto(${JSON.stringify(url)}, { waitUntil: "domcontentloaded", timeout: waitLimits.navigation });`;
+    const onSite = (url: URL) =>
+      siteDomain === undefined
+        ? url.origin === siteOrigin
+        : url.protocol === "https:" &&
+          (url.hostname === siteDomain || url.hostname.endsWith(`.${siteDomain}`));
+    // The first `count` light rows of the list, after `steps` bring it.
+    const readRows = async (steps: string, count: number): Promise<LightRead> => {
+      const read = Schema.decodeUnknownSync(LightRows)(
+        await run(`${steps}
+const list = page.getByRole("list", { name: "Items", exact: true });
+const shown = await waitForOutcome({ empty: page.getByRole("status").filter({ hasText: /^No items$/ }), list }, site);
+if (shown === "empty") return { rows: [], more: false };
+const { rows, more } = await waitForRows(list.getByRole("listitem"), {
+  name: ".name",
+  href: { selector: "a", attribute: "href" },
+}, { count: ${count}, key: { attribute: "data-item-id" }, region: list, ...site });
+return { rows: rows.map((row) => ({ id: row.key, name: row.name, href: new URL(row.href, page.url()).href })), more };`),
+      );
+      return { ...read, hasNext: false };
+    };
+    const page = await readList(list, {
+      keyOf: (row: LightRow) => row.id,
+      remainingMs,
+      open: (_position, count) => readRows(navigate(new URL("/items", siteOrigin).href), count),
+      // More of the list already open: read again, without navigating.
+      more: (_read, count) => readRows("", count),
+    });
+    // Each returned row's own page, one call each, only for the rows this call returns.
+    const items: Item[] = [];
+    for (const row of page.rows) {
+      if (!onSite(new URL(row.href)))
+        throw new errors.OperationFailure("An item's link leaves the site");
+      const detail = Schema.decodeUnknownSync(Schema.Struct({ maker: Schema.NonEmptyTrimmedString }))(
+        await run(`${navigate(row.href)}
+const { values } = await waitForValues({ maker: page.getByTestId("maker") }, site);
+return { maker: values.maker };`),
+      );
+      items.push({ id: row.id, name: row.name, maker: detail.maker });
+    }
+    return { items, ...page.output };
+  },
+);

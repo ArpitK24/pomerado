@@ -7,7 +7,13 @@ description: Design and run a few combined live test cases for a read. A read si
 
 This skill is for reads. A write does the original task: it proves its tool with its act session
 (writes skill), designs no tests, runs no live test and builds no offline test suite<!-- pomerado:section testing.write-http-check -->. It still checks its
-composed script's read-back and comparison offline over what the session read (writes skill). A
+composed script's read-back and comparison offline over what the session read (writes skill).
+As the one exception, a write whose build runs in test mode, because its caller confirmed the
+site account is a test account, prefers one no-match case in `test/cases.json` when it takes an
+item's id, key or URL: a made-up value in the site's own format that the site has no record of,
+expecting `invalid_input`, with `purpose` naming the capture of the site's not-found page. A host
+that runs it does so on the composed script with every commit mark settled, so it stops before
+any save; other hosts ignore it. A
 read proves its operation with its example, run again after each fix as the core skill says, then tests what the example did not
 exercise with a few live cases, each designed to cover as much as it can. A read signed out runs a
 handful (below). A signed-in read runs at most four distinct inputs beyond its example
@@ -62,8 +68,9 @@ Design it as soon as you know the page and its inputs, and run it once the examp
 Where the host runs no signed-in live tests, `live_tests` answers `unavailable` and the example
 alone proves a signed-in read's tool. Otherwise a signed-in read runs at most four distinct
 inputs in a build or repair, beyond its example, each chosen for high value and broad coverage:
-its combined case first, the second case above where it needs one, and one made-up key for an
-input that takes a record's own key, as a read signed out runs it (below). The host enforces
+its combined case first, the second case above where it needs one, and one no-match case,
+preferably a made-up key for an input that takes a record's own id, key or URL, else a query or
+filter the site has no results for, as a read signed out runs it (below). The host enforces
 it: a batch or `testInput` that would add a fifth input is refused as `limit` and runs nothing.
 Running an input that already ran again, after a fix or on `src/tool-http.mjs`, is free, so
 merge inputs into those cases rather than adding a case. The host runs them on the build's
@@ -71,7 +78,7 @@ own signed-in browser, one at a time and warm, never on a new browser. Each case
 under the signed-in session rules that already apply to the example: it saves no record, view or
 setting, and a filter the site saves with a view or setting goes through the page's own row query
 or is restored in the same step, as the workspace guide says. Design no example run cold, no
-other no-results case and no edge cases.<!-- pomerado:section testing.signed-in-http --> Publication review reads
+second no-results case and no edge cases.<!-- pomerado:section testing.signed-in-http --> Publication review reads
 the host's record of the cases you ran signed in, judges a failing case as a bug, and treats
 what you did not test as disclosure, not a gap. Then go on at "Run and fix the cases", below.
 
@@ -184,7 +191,11 @@ form refusing that input, with its own validation message or, where the captures
 responses, a 400, 413, 414 or 422 response to the request its form sent. A refusal of the request
 your tool made proves nothing, since that request can be wrong, and neither does a 401, 403, 404,
 405, 429 or 5xx. Then change the expectation to what the site shows, and name that capture in the
-case's `purpose` and in `coverage`; review accepts the change only against it. Where the site
+case's `purpose` and in `coverage`; review accepts the change only against it. Name a capture by
+its exact path, a snapshot listed in `captures/index.json` or
+`captures/results/<executionId>.json`, not by an execution ID alone: a later look can drop an
+earlier snapshot from the index, while its file stays readable by path. Prefer the snapshot that
+shows the site's own controls applying the input. Where the site
 itself bounds a value, such as its own field's maximum length, put that bound in the input schema
 rather than a case. Before you run again,
 fix everything the batch revealed: read every failure and every output, and batch as many fixes

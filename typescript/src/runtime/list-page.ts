@@ -33,9 +33,10 @@ export const listSeenMax = 16;
  */
 export const listDraftMaxBytes = 1_360;
 /**
- * The most calls in a row the run's time may stop at the same position before it read past it.
- * The next one that stops there ends the list with `no_progress`, so a caller paging until
- * `has_more` is false still ends when every run's time runs out before it reads.
+ * The most calls in a row the run's time may stop at the same position before it read past it, or
+ * that find the site showing none of a list earlier pages returned rows of. The next one that
+ * stops there ends the list with `no_progress`, so a caller paging until `has_more` is false still
+ * ends when every run's time runs out before it reads.
  */
 const listTimeStopsMax = 1;
 /** The most one call reads before it returns what it has with a cursor that continues. */
@@ -114,9 +115,9 @@ const draftBytes = (draft: unknown) => Buffer.byteLength(JSON.stringify(draft), 
  * The part of a cursor a script writes and reads: its mechanism, position, the rows returned so
  * far, the anchor (the last returned row's key digest), the digests of the last rows returned,
  * the digest of the context the site applied, how many calls in a row the run's time stopped at
- * this position (`t`), and whether rows returned before may come back on later pages (`r`), set
- * once a page started over or continued from a segment's first row without finding where the
- * previous page left off. The host adds the tool, the inputs' digest, the caller it was issued to
+ * this position or found the site showing none of the list (`t`), and whether rows returned before
+ * may come back on later pages (`r`), set once a page started over or continued from a segment's
+ * first row without finding where the previous page left off. The host adds the tool, the inputs' digest, the caller it was issued to
  * and the expiry, and signs it. Its JSON is at most `listDraftMaxBytes`.
  */
 export const listDraftFields = {
@@ -279,7 +280,10 @@ export interface ListStart {
   readonly anchor?: string;
   readonly seen: ReadonlySet<string>;
   readonly context?: string;
-  /** How many calls in a row before this one the run's time stopped at this position. */
+  /**
+   * How many calls in a row before this one the run's time stopped at this position, or found the
+   * site showing none of the list.
+   */
   readonly timeStops: number;
   /**
    * Whether rows returned before may come back: an earlier page in this cursor's chain started
@@ -524,7 +528,10 @@ export const finishList = <Row>(
     readonly totalResults: number | null;
     readonly listChanged: boolean;
     readonly context?: string;
-    /** The run's time stopped this call before it read past its position; not a stall. */
+    /**
+     * The run's time stopped this call before it read past its position, or the site showed none
+     * of the list a later call may read; not a stall.
+     */
     readonly bounded?: boolean;
     /**
      * With no rows, the key of the row `next` resumes after when it is not the last row the
@@ -721,12 +728,14 @@ const growing = (mechanism: ListMechanism) =>
  * site still offers more stops this call with `has_more` true. A call returns no rows while the
  * list has more only when the run's time or the call's reads stopped it. A call the run's time
  * stopped before it read past its position hands back that same position, and a second such call
- * in a row ends the list with `no_progress`.
+ * in a row ends the list with `no_progress`. So does a later page whose site shows no rows and a
+ * total of 0 after earlier pages returned rows, which usually means the search did not load: it is
+ * never the list's end, and `reason` says so for the tool to return.
  */
 export const readList = async <Row, Segment extends ListSegment<Row>>(
   list: ListStart,
   reader: ListReader<Row, Segment>,
-): Promise<{ readonly rows: Row[]; readonly output: ListOutput }> => {
+): Promise<{ readonly rows: Row[]; readonly output: ListOutput; readonly reason?: string }> => {
   const whole = growing(list.mechanism);
   const start = list.position;
   const anchor = list.anchor;
@@ -943,6 +952,29 @@ export const readList = async <Row, Segment extends ListSegment<Row>>(
         bounded: true,
       }),
     };
+  // A later page whose site shows no rows and a total of 0 after earlier pages returned rows is far
+  // likelier a search that did not load or apply than a list that emptied: the next call retries
+  // the same position, once, as after a call the run's time stopped, so the list never ends here.
+  if (start !== undefined && list.returned > 0 && totalResults === 0 && rowsRead().length === 0) {
+    const output = finishList(list, {
+      rows: [],
+      keyOf: reader.keyOf,
+      next: start,
+      hasMore: true,
+      totalResults,
+      listChanged: pick().listChanged,
+      ...(applied === undefined ? {} : { context: applied }),
+      bounded: true,
+    });
+    return {
+      rows: [],
+      output,
+      reason:
+        output.next_cursor === null
+          ? `The site showed no results on a later page after listing ${list.returned} before, and no cursor can retry that page, so its list may have emptied. Prefer calling again without cursor to start from the first page.`
+          : `The site showed no results on a later page after listing ${list.returned} before; this usually means its search or list did not load. Prefer calling again with next_cursor and the same inputs.`,
+    };
+  }
   const picked = pick();
   const read = rowsRead();
   const keys = digestsOf(read);

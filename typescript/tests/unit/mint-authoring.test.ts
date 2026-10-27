@@ -718,7 +718,7 @@ it("keeps the HTTP version passages in host sections", async () => {
         ["core", "or the site's own data request, to opening each record's page."],
         ["search", "it never returns unfiltered results as filtered. When setting one control"],
         ["testing", "builds no offline test suite. It still checks its composed script's read-back"],
-        ["testing", "other no-results case and no edge cases. Publication review reads"],
+        ["testing", "second no-results case and no edge cases. Publication review reads"],
         ["testing", "own controls\"). Either way, read the input back"],
         ["testing", "count toward the same four. The example uses"],
         ["writes", "run no live test of it. That rule is about running the write"],
@@ -1210,6 +1210,18 @@ it("asks for an access code with a private secret question", async () => {
   );
 });
 
+// A file collected during a build has no download link, which only a published tool's runs add.
+it("tells the minter a collected file's download link appears only when the published tool runs", async () => {
+  const texts = await renderedTexts("typescript/authoring");
+  const forms = (texts.get("forms") ?? "").replace(/\s+/g, " ");
+  expect(forms).toContain(
+    "see only its name, type, size and sha256. While the tool is being built, the file has no download_url or expires_at; the published tool's runs add them. Prefer returning the file as collected, and never require those fields in code.",
+  );
+  expect(await readFile("typescript/authoring/examples/dates-and-files.ts", "utf8")).toContain(
+    "// download_url and expires_at appear only when the published tool runs; return the file as collected and never require them.\n    return { statement };",
+  );
+});
+
 const sha256 = (text: string) => createHash("sha256").update(text).digest("hex");
 
 /*
@@ -1230,17 +1242,17 @@ it("renders the pinned standalone authoring", async () => {
       .filter(([path]) => path !== "reference/publication-review.md")
       .map(([path, text]) => [sha256(text), `workspace/${path}`]),
   ]).toStrictEqual([
-    ["7c354c75911208d7231700fbb2e0dae4118b60cc763723696e92505849e94f30", "core"],
+    ["d57a1b33bb23cbf83647cc69857aea8078d60188eb732647d70f17f77ef87544", "core"],
     ["933e2daac360d31beeeb2a8aeabcf22ca8512cc0272f321b047106f4a2055ab3", "search"],
-    ["1b7d4195a350f19b2eee83ba2ae48f2c4dc68dc0d5c4a4f395e54d34ada30068", "auth"],
-    ["ead4c4ffc04505a9951a6f24ec69ff795019f0142adf63c7bf7e4f66e74527d9", "testing"],
-    ["3cc71d02f70447f1de02e062695095682a0cabab4ed668abe1309d017bc0cf83", "pagination"],
-    ["49373d05397797d5862f12f62101615c99257e025056c7385b2b9bb5ebcd5f7d", "forms"],
+    ["cec5bca01bf057a95faaab07e25c02e3d0b9329e66d6df97b6744f81ab421bf7", "auth"],
+    ["ad5b4f8391094f6d7c8ff4a480b071bb298807da9523971e0aaf7d719f152664", "testing"],
+    ["2b559ad88157f28be2a054787f4c736cf192bb825760bdf3050c01a59d060ba8", "pagination"],
+    ["c21b3e69771470e4ae72b6c88201a2b6fad8d3eea76f4ebfda47993aeb351448", "forms"],
     ["7308f56f0ac66a427deac277366104e8e6e023aa83debdbd616d22b11ea3f95f", "writes"],
     ["01eb1c98d8945987929ca3d8c68d4d848e64415d2042fc844166a490ca9457cb", "cart"],
-    ["582b80d4f682d4c6af6d101515a3a12febb016e2e4c5d7f0fbf3f51b3aab4dbd", "caller-input"],
-    ["c6bcadcf0be7d9dc94fe00a7bf884efb261b0d8e5748340639e90615207f4656", "publication"],
-    ["5dd148b3ac57ded02ef984c61418399ebe11e2ea1017a2ebb19f70e0d905cff4", "workspace/AGENTS.md"],
+    ["c91deddad323e3c996cc3a172812a1cfd2e14eba76f0552264384708c7d13c58", "caller-input"],
+    ["04e9f9dca786e3cf3f125a52d5bc73d71506387db521ad3ac53f8ca13dd5dd6e", "publication"],
+    ["dfe95a1803043e85741a601f930f173de3d37284c0d70727f3bd8546304ae418", "workspace/AGENTS.md"],
     ["9501ae9c273d5d4db8976a544879f7aee44212c8a616b00e74263dcd3c593035", "workspace/README.md"],
   ]);
 });
@@ -1361,7 +1373,7 @@ it("renders the search URL fast path only when a host turns it on", async () => 
     [sha256(on.agents), "workspace/AGENTS.md"],
   ]).toStrictEqual([
     ["0386d3e23fb8cd652f7c64320b940b6a61c7ed9fb3315579fe5521c835789b42", "search"],
-    ["b8de1a1430d36ce8cab3e6191dec38f63789446b0237ffef06f9ed0843982b42", "workspace/AGENTS.md"],
+    ["68b5bb2c58c870c60fa0fcda50d131f6c9882f74d00252d0b1073d6d356161cf", "workspace/AGENTS.md"],
   ]);
   expect(on.digests.filter(([, name]) => name !== "search")).toStrictEqual(
     off.digests.filter(([, name]) => name !== "search"),

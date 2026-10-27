@@ -206,6 +206,7 @@ const call = async (
     ids: page.rows.map((row) => row.id),
     output: page.output,
     cursor: sealed.next_cursor ?? undefined,
+    reason: page.reason,
   };
 };
 
@@ -496,6 +497,44 @@ describe("a call the run's time stops", () => {
       has_more: true,
       next_cursor_unavailable: "no_progress",
     });
+  });
+});
+
+describe("a later page whose site shows no results after earlier pages returned some", () => {
+  it("never ends the list: it hands back a cursor for the same page with a reason, once", async () => {
+    // A directory search with 310 results. The first page returns 20, then the next call's
+    // search shows no results and a total of 0, as a search that did not load would.
+    const site = listSite(ids(1, 310), 20);
+    const first = await call(site, "pages", 20);
+    expect(first.ids).toEqual(ids(1, 20));
+    expect(first.output).toMatchObject({ has_more: true, total_results: 310 });
+    const results = site.rows.splice(0);
+    const empty = await call(site, "pages", 20, first.cursor);
+    expect(empty.ids).toEqual([]);
+    expect(empty.output).toMatchObject({
+      has_more: true,
+      next_cursor: expect.any(String),
+      total_results: 0,
+    });
+    expect(empty.output.next_cursor_unavailable).toBeUndefined();
+    expect(empty.reason).toMatch(/no results on a later page after listing 20 before.*next_cursor/u);
+    // The same search still shows nothing on the call after: the list ends without a cursor, its
+    // has_more still true, so a caller paging until has_more is false still ends.
+    const again = await call(site, "pages", 20, empty.cursor);
+    expect(again.output).toMatchObject({
+      next_cursor: null,
+      has_more: true,
+      next_cursor_unavailable: "no_progress",
+    });
+    // A first page with no cursor that shows no results is the list's end, as before.
+    expect((await call(site, "pages", 20)).output).toMatchObject({
+      next_cursor: null,
+      has_more: false,
+    });
+    // The search loads again: the cursor continues where the first page stopped.
+    site.rows.push(...results);
+    const resumed = await call(site, "pages", 20, empty.cursor);
+    expect(resumed.ids).toEqual(ids(21, 40));
   });
 });
 

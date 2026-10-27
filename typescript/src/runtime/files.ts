@@ -199,7 +199,10 @@ export interface ScriptFiles {
    * click on an export link), with the host capturing downloads, and returns the downloaded
    * file for the output once it finished. It waits up to `timeoutMs` (30 s by default) after
    * the trigger for the download to finish. The bytes stay with the host; the returned object
-   * carries only the file's metadata and sha256, and is returned as an output `FileOutput`.
+   * carries only the file's metadata and sha256, and is returned as an output `FileOutput`. A
+   * download over the host's per-file cap, or over what the run's caps leave, throws an
+   * `OperationFailure` that names the cap, never `InvalidInput`: the page made the file, so the
+   * limit is the host's and the caller has no other file to send.
    */
   readonly collect: (
     trigger: () => Promise<unknown>,

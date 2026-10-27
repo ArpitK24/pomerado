@@ -29,10 +29,17 @@ import { withListHost, type ListHost } from "./list-host.js";
  * execute call that sends it, an HTTP implementation `journal.enteringCommit(name)`. The host
  * treats a run as having sent nothing only when no mark was entered, and maintenance finishes
  * only the steps a failed run never reached.
+ *
+ * `commitsUnproven` names commit steps of `commits` after the last one the build's write session
+ * entered, which the session never reached, as when the caller's facts ran out before them, such
+ * as `["place-order"]` after a session that saved the address. Publication accepts them unentered
+ * only after a step the session entered, and reports them as unproven until a run reaches them.
+ * Runs ignore it.
  */
 export interface WriteDeclaration {
   readonly confirmation: "message" | "readback" | "unverifiable";
   readonly commits?: readonly string[];
+  readonly commitsUnproven?: readonly string[];
 }
 
 /**

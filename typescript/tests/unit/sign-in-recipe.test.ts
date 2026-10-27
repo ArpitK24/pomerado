@@ -171,7 +171,7 @@ describe("decodeSignInRecipe", () => {
   });
 
   it("refuses a version it does not know, so a run never drops what that version adds", () => {
-    expect(decodeSignInRecipe(JSON.stringify({ version: 8, steps, signedIn }))).toBe(
+    expect(decodeSignInRecipe(JSON.stringify({ version: 9, steps, signedIn }))).toBe(
       "unknown_version",
     );
   });

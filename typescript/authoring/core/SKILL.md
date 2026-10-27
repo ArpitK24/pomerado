@@ -20,7 +20,9 @@ read (the `writes` skill). The scope follows what the tool is now, as the `testi
 sign-in codes
 belong to the host; never request a password, cookie or TOTP seed in model-visible text.
 
-Asking the caller follows `AGENTS.md` ("Try hard, then ask").
+Asking the caller follows `AGENTS.md` ("Try hard, then ask"). When neither the request nor an
+answer says whether the tool looks things up or changes something, prefer asking the
+read-or-write choice before your first execution.
 
 Write ordinary TypeScript or JavaScript files. Export a default Kernel script, as
 described below. Import the actual canonical SDK entrypoint given in the workspace
@@ -635,7 +637,8 @@ element. Prefer values the list page already holds, in its rows or its embedded 
 site's own data request<!-- pomerado:section core.data-request-reference -->, to opening each record's page. When the tool must open
 each record's detail page, keep each to a few calls (open, wait, one read), and consider whether
 the request is better served as two tools, a search and a details read by identifier; say so in
-`coverage`.
+`coverage`. Prefer opening those detail pages only for the rows the call returns, after
+`readList`, not inside the list reader (pagination skill).
 Prefer the page's own structured data, its embedded JSON or the data response it renders from,
 to its rendered cards when it holds the same fields for the same records, and check on the
 example that it matches what the page shows. Embedded JSON holds the page as first rendered:

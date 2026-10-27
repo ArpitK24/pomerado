@@ -128,6 +128,7 @@ export const downloadStatement = defineOperation(
       if (!answer.success)
         throw new errors.OperationFailure(String(answer.error), { stderr: answer.stderr });
     });
+    // download_url and expires_at appear only when the published tool runs; return the file as collected and never require them.
     return { statement };
   },
 );

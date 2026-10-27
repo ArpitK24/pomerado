@@ -89,10 +89,18 @@ export const LegacyAutofillRecipe = Schema.Struct({
     openPath: Schema.optional(Schema.String.pipe(Schema.maxLength(2_000))),
   }),
 });
+/**
+ * A version 2 step may also name `matchSelector` on a device approval: the element its screen shows
+ * a number in for the owner to pick on their device, which a replay reads again and shows the owner
+ * when it is 1 to 3 digits. It rides in every version from 2 without one of its own. A host that
+ * predates it ignores it in a version 2 recipe and refuses a version 4 to 8 recipe that has it, as
+ * a host that predates `refills` refuses one with that.
+ */
 const PopupRecipeStep = Schema.Struct({
   ...RecipeStep.fields,
   popup: Schema.optional(AutofillPopup),
   approval: Schema.optional(AutofillApproval),
+  matchSelector: Schema.optional(Selector),
 });
 /** Version 2 keeps a host that does not know it from dropping popup metadata and filling the primary tab. */
 export const PopupAutofillRecipe = Schema.Struct({
@@ -323,6 +331,40 @@ export const WildcardAutofillRecipe = workspacePages(
       recipe.steps[0]?.anySegments === undefined || "the first step lists no anySegments",
   ),
 );
+/**
+ * A version 8 step: a version 7 step that may say `submitVia: "keyboard"`. Another element sat over
+ * its submit when the host sent it, such as a fixed footer, and the host pressed that same submit
+ * from the keyboard. A replay presses it so first, once focus lands on it, and clicks it
+ * otherwise. Only a step that names a submit says it.
+ */
+const KeyboardRecipeStep = Schema.extend(
+  WildcardRecipeStep,
+  Schema.Struct({ submitVia: Schema.optional(Schema.Literal("keyboard")) }),
+).pipe(
+  Schema.filter(
+    (step) =>
+      step.submitVia === undefined || step.submit !== undefined || "a submitVia step names a submit",
+  ),
+);
+/**
+ * Version 8: version 7 whose steps may say `submitVia`. A host that does not know version 8
+ * refuses it, so it never replays such a step by clicking a submit another element covers. A
+ * recipe with no `submitVia` is written as before, in the lowest version it needs.
+ */
+export const KeyboardSubmitAutofillRecipe = workspacePages(
+  Schema.Struct({
+    ...LegacyAutofillRecipe.fields,
+    version: Schema.Literal(8),
+    workspace: Schema.optional(Schema.Struct({ parent: HostName })),
+    steps: Schema.Array(KeyboardRecipeStep).pipe(Schema.minItems(1), Schema.maxItems(12)),
+    signedIn: WildcardSignedIn,
+  }).annotations({ parseOptions: { onExcessProperty: "error" } }),
+).pipe(
+  Schema.filter(
+    (recipe) =>
+      recipe.steps[0]?.anySegments === undefined || "the first step lists no anySegments",
+  ),
+);
 export const AutofillRecipe = Schema.Union(
   LegacyAutofillRecipe,
   PopupAutofillRecipe,
@@ -330,9 +372,10 @@ export const AutofillRecipe = Schema.Union(
   KeySubmitAutofillRecipe,
   DismissAutofillRecipe,
   WildcardAutofillRecipe,
+  KeyboardSubmitAutofillRecipe,
 );
 export type AutofillRecipe = typeof AutofillRecipe.Type;
-export type AutofillRecipeStep = typeof WildcardRecipeStep.Type;
+export type AutofillRecipeStep = typeof KeyboardRecipeStep.Type;
 
 /**
  * Whether a live path is a recorded screen's: as many segments, each the same, except that each
@@ -396,6 +439,8 @@ interface RecordedRecipeStep {
   readonly origin?: "workspace" | undefined;
   readonly popup?: AutofillRecipeStep["popup"] | undefined;
   readonly approval?: AutofillRecipeStep["approval"] | undefined;
+  /** A device approval's element that shows the number the owner picks on their device. */
+  readonly matchSelector?: string | undefined;
   readonly rejectedMarkers?: AutofillRecipeStep["rejectedMarkers"] | undefined;
   /** With each identifier field's accepted kinds, never a value. */
   readonly fields: readonly AutofillField[];
@@ -403,6 +448,8 @@ interface RecordedRecipeStep {
   /** The key pressed in the last field to submit its form, on a form with no submit control. */
   readonly submitKey?: SubmitKey | undefined;
   readonly submittedBy?: "host" | "minter" | undefined;
+  /** `keyboard` when the host pressed the step's covered submit from the keyboard. */
+  readonly submitVia?: "keyboard" | undefined;
   /** A two-factor method choice's recorded methods. */
   readonly methods?: AutofillRecipeStep["methods"] | undefined;
   /** The secrets an earlier screen took that this one asks for again with a second factor. */
@@ -426,6 +473,7 @@ export const recipeStep = (step: RecordedRecipeStep): AutofillRecipeStep => ({
   page: step.page,
   ...((step.anySegments ?? []).length === 0 ? {} : { anySegments: step.anySegments }),
   ...(step.approval === undefined ? {} : { approval: step.approval }),
+  ...(step.matchSelector === undefined ? {} : { matchSelector: step.matchSelector }),
   ...(step.popup === undefined ? {} : { popup: step.popup }),
   ...(step.rejectedMarkers === undefined ? {} : { rejectedMarkers: step.rejectedMarkers }),
   fields: step.fields.map((field) =>
@@ -446,17 +494,19 @@ export const recipeStep = (step: RecordedRecipeStep): AutofillRecipeStep => ({
   ...(step.submit === undefined ? {} : { submit: step.submit }),
   ...(step.submitKey === undefined ? {} : { submitKey: step.submitKey }),
   ...(step.submittedBy === undefined ? {} : { submittedBy: step.submittedBy }),
+  ...(step.submitVia === undefined ? {} : { submitVia: step.submitVia }),
   ...(step.methods === undefined ? {} : { methods: step.methods }),
   ...(step.dismiss === undefined ? {} : { dismiss: step.dismiss }),
 });
 
 /**
- * A verified sign-in's recipe: version 7 only when a step lists segments written as `*`
+ * A verified sign-in's recipe: version 8 only when a step says `submitVia`, else version 7 only
+ * when a step lists segments written as `*`
  * (`anySegments`; an empty list is none and is left out), else version 6 only when a step names
  * `dismiss`, else version 5 only when a step submits with a key or refills a secret (`refills`),
  * else version 4 only when its sign-in may move to a workspace host (`origins.workspace`, or a
  * workspace step), else version 2 only with a popup or an approval, else version 1. A security
- * answer's question selector rides in any of them. Versions 4 to 7 write `workspace` before
+ * answer's question selector rides in any of them. Versions 4 to 8 write `workspace` before
  * `steps`.
  */
 export const autofillRecipe = <SignedIn>(
@@ -465,9 +515,10 @@ export const autofillRecipe = <SignedIn>(
   origins: AutofillRecipeOrigins = {},
 ) => {
   const lists = steps.some((step) => (step.anySegments ?? []).length > 0);
-  if (lists || steps.some((step) => step.dismiss !== undefined))
+  const pressed = steps.some((step) => step.submitVia !== undefined);
+  if (pressed || lists || steps.some((step) => step.dismiss !== undefined))
     return {
-      version: lists ? (7 as const) : (6 as const),
+      version: pressed ? (8 as const) : lists ? (7 as const) : (6 as const),
       ...(origins.workspace === undefined
         ? {}
         : { workspace: { parent: origins.workspace.parent } }),

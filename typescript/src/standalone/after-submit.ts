@@ -17,11 +17,19 @@ const failed = (report: AutofillStepReport) =>
   report.outcome !== "filled" ||
   (report.submit !== "clicked" && report.submit !== "none" && report.submit !== "page");
 
+/** The report without its host-only `navigated`, which no minter reads. */
+const shownReport = (report: AutofillStepReport): AutofillStepReport => {
+  if (report.outcome !== "filled") return report;
+  const { navigated: _navigated, ...shown } = report;
+  return shown;
+};
+
 /**
- * Each sign-in step's result as the minter reads it. After a clicked submit the host saves the
- * page's controls, screened like other workspace data, to `captures/after-submit/<step>.json`
- * (read-only) and names the file in one line. A step that fails carries the last saved controls
- * inline as well, capped.
+ * Each sign-in step's result as the minter reads it, without the report's host-only `navigated`,
+ * where the page went after the click, whose origins the page chose after typing. After a clicked
+ * submit the host saves the page's controls, screened like other workspace data, to
+ * `captures/after-submit/<step>.json` (read-only) and names the file in one line. A step that
+ * fails carries the last saved controls inline as well, capped.
  */
 export const makeAfterSubmit = (options: {
   readonly workspace: Pick<LocalWorkspace, "install">;
@@ -29,9 +37,10 @@ export const makeAfterSubmit = (options: {
 }) => {
   let step = 0;
   let last: { readonly path: string; readonly saved: Saved } | undefined;
-  return (report: AutofillStepReport) =>
+  return (whole: AutofillStepReport) =>
     Effect.gen(function* () {
       step += 1;
+      const report = shownReport(whole);
       if (report.outcome === "filled" && report.controls !== undefined) {
         const { controls, ...shown } = report;
         const path = afterSubmitPath(step);

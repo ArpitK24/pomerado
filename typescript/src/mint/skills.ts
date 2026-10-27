@@ -345,21 +345,45 @@ export const loadAuthoringSkills = (
   });
 
 /**
- * Each skill's text at the path the minter reads it, `.agents/<name>/SKILL.md`, for a review that
- * may read the skills the minter followed. A skill whose content is not inline text is left out.
+ * A reference file's inline text, or undefined for an entry that is not an inline file, such as a
+ * directory or a file on disk, or for content that is not UTF-8 text.
+ */
+const referenceText = (entry: NonNullable<SkillDescriptor["references"]>[string]) => {
+  if (entry.type !== "file") return undefined;
+  if (typeof entry.content === "string") return entry.content;
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(entry.content);
+  } catch {
+    return undefined;
+  }
+};
+
+/**
+ * Each skill's text and reference files at the paths the minter reads them,
+ * `.agents/<name>/SKILL.md` and `.agents/<name>/references/<file>`, for a review that may read the
+ * skills the minter followed and the examples they point to. A skill's text or reference file that
+ * is not inline text is left out.
  */
 export const skillReferenceFiles = (
   skills: readonly SkillDescriptor[],
 ): ReadonlyMap<string, string> =>
   new Map(
-    skills.flatMap(({ name, content }) => {
+    skills.flatMap(({ name, content, references = {} }) => {
       const text =
         typeof content === "string"
           ? content
           : content instanceof Uint8Array
             ? new TextDecoder().decode(content)
             : undefined;
-      return text === undefined ? [] : [[`.agents/${name}/SKILL.md`, text] as const];
+      return [
+        ...(text === undefined ? [] : [[`.agents/${name}/SKILL.md`, text] as const]),
+        ...Object.entries(references).flatMap(([fileName, entry]) => {
+          const reference = referenceText(entry);
+          return reference === undefined
+            ? []
+            : [[`.agents/${name}/references/${fileName}`, reference] as const];
+        }),
+      ];
     }),
   );
 

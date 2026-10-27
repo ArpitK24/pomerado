@@ -142,7 +142,10 @@ describe("Guardian's source reads on the local host", () => {
       loadStandaloneAuthoring(fileURLToPath(new URL("../../authoring/", import.meta.url))),
     );
     const references = skillReferenceFiles(skills);
-    expect(references.size).toBe(skills.length);
+    // Each skill's text, and each of its reference files, all of which are text.
+    expect(references.size).toBe(
+      skills.reduce((count, skill) => count + 1 + Object.keys(skill.references ?? {}).length, 0),
+    );
     const { read } = await reader(references);
     // The skill is long, so its first chunk starts it.
     const core = await read(".agents/core/SKILL.md");

@@ -92,6 +92,14 @@ list that stalls while its control is still offered has more: the pager and `rea
 `has_more` true with a position that continues. Never step a control whose click could submit or
 change anything.
 
+## Rows that need a detail page
+
+When each row's fields come from the row's own detail page, prefer reading the list with
+`readList` over the rows the list itself shows, keyed as usual, and opening the detail page only
+for each row `readList` returns. Avoid opening detail pages inside `open`, `more` or `next`:
+`readList` asks them for every row from the start of the segment up to the cursor's position, so a
+later page would open every earlier row's detail page again.
+
 ## Changed lists
 
 Lists change between calls. `readList` reads from the segment that holds the last row the
@@ -115,13 +123,19 @@ When the site applied a context the caller did not set, such as a location it pi
 as the segment's `context`, so a different one sets `list_changed`. Never promise a snapshot the
 site does not keep.
 
+No case needs to show a changed list: a build can't make the site's list change, and the publication review counts list_changed and the other paging fields core adds as core's, so prefer leaving it out of `notTested` and asking no question about it.
+
 ## Stop
 
 `readList` returns as soon as it holds `limit` rows. Per call it reads at most 5 site pages or
 API responses, or 10 steps, within `remainingMs()`; when a bound stops it, it returns what it
 read with a position that continues; a call the run's time stopped before it read past its
 position hands back that same position, which a call with more time continues, and a second such
-call in a row ends the list with `no_progress`. `next_cursor` is null, with `has_more` true and
+call in a row ends the list with `no_progress`. A later call whose site shows no results and a
+total of 0 after earlier calls returned rows is never the list's end either: `readList` hands back
+that same position once, with a `reason` that says the search likely did not load; prefer returning
+that `reason` as the result's own, and calling a list complete only when `has_more` is false.
+`next_cursor` is null, with `has_more` true and
 `next_cursor_unavailable` saying why, past the deepest position a tool can rebuild without the
 site's link or token (10 site pages or 20 steps, `depth_cap`), when the site's link or token is
 too long for a cursor (`position_too_long`), or when a later call returned no rows and its next

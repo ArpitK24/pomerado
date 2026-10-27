@@ -1,4 +1,4 @@
-import { Data, Duration, Effect, Fiber, Option, TestClock, TestContext } from "effect";
+import { Clock, Data, Duration, Effect, Fiber, Option, TestClock, TestContext } from "effect";
 import { expect, it } from "vitest";
 import type { AutofillRecipe } from "../../src/destinations/autofill-recipe.js";
 import type { AutofillSignedInCheck, AutofillStep } from "../../src/destinations/autofill-step.js";
@@ -8,7 +8,8 @@ import type { AutofillHooks } from "../../src/runtime/autofill-state.js";
 // What a screen's wait does after the host filled a screen: a fill whose screen went with nothing
 // sent waits again once, as a single-page app's login route removes its form while it sends a
 // signed-in browser on; and once the login went out, a page off the sign-in screens that can't
-// tell, such as an account picker in place of a code screen the site skipped, ends the wait.
+// tell, such as an account picker in place of a code screen the site skipped, ends the wait. A
+// submitted screen still showing is the site's answer only at the wait's deadline.
 
 class TestFailure extends Data.TaggedError("TestFailure")<{ readonly code: string }> {}
 
@@ -179,4 +180,52 @@ it("ends a code screen's wait on an account picker that can't tell once the pass
   expect(outcome).toMatchObject({ outcome: "signed_in", alreadySignedIn: false, cantTell: true });
   expect(events).toContainEqual({ stage: "skipped", reason: "cant_tell_landing" });
   expect(confirmed).toHaveLength(1);
+});
+
+it("waits for a password screen the site shows 1.5 s after the identifier went out", async () => {
+  let continuedAt: number | undefined;
+  let signedIn = false;
+  const here = (): AutofillSignedInCheck =>
+    signedIn
+      ? { signedIn: true, url: `${origin}/home` }
+      : { signedIn: false, failed: "indicator_not_visible", url: login };
+  const hooks: AutofillHooks<TestFailure> = {
+    open: () => Effect.void,
+    check: () => Effect.sync(here),
+    confirm: () => Effect.sync(here),
+    // The site looks the account up for 1.5 s, showing the identifier screen meanwhile.
+    inspect: (step) =>
+      Clock.currentTimeMillis.pipe(
+        Effect.map((now) =>
+          isPassword(step) === (continuedAt !== undefined && now - continuedAt >= 1_500)
+            ? shownAt(login, step)
+            : ({ outcome: "refused", reason: "not_found" } as const),
+        ),
+      ),
+    fill: ({ step }) =>
+      Clock.currentTimeMillis.pipe(
+        Effect.map((now) => {
+          if (isPassword(step)) signedIn = true;
+          else continuedAt = now;
+          return {
+            outcome: "filled" as const,
+            fields: step.fields.map((field) => ({ slot: field.slot, status: "filled" as const })),
+            submit: "clicked" as const,
+            url: login,
+          };
+        }),
+      ),
+  };
+  const { outcome } = await replay(
+    {
+      version: 2,
+      steps: [
+        { page: login, fields: [{ selector: "#email", accepts: ["username"] }], submit: "#continue" },
+        passwordScreen,
+      ],
+      signedIn: { selector: "#identity" },
+    },
+    hooks,
+  );
+  expect(outcome).toMatchObject({ outcome: "signed_in", alreadySignedIn: false });
 });

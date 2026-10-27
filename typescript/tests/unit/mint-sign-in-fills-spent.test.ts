@@ -234,6 +234,23 @@ it("ends a host_refused report as sign-in unavailable once both password fills a
     build: "incomplete",
     recoveryReason: "sign_in_unavailable",
   });
+  // The login reached the site twice and neither sign-in confirmed, so sign-in is what failed;
+  // the record still names the refused refill the report stood on.
+  const records = outcome.diagnostics.flatMap((entry) => {
+    try {
+      return [JSON.parse(entry) as Record<string, unknown>];
+    } catch {
+      return [];
+    }
+  });
+  expect(records).toContainEqual(
+    expect.objectContaining({
+      phase: "blocked",
+      reason: "sign_in_unavailable",
+      reported: "host_refused",
+      hostRefusals: [{ source: "sign_in_refill" }],
+    }),
+  );
 });
 
 it("refuses a host_refused report while a password fill remains, and the next screen still fills", async () => {

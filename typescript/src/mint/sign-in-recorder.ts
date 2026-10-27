@@ -24,6 +24,7 @@ import {
 } from "../destinations/sign-in-recipe.js";
 import type { CredentialRejectedField, WebsiteCredentials } from "../runtime/authentication.js";
 import { logicalRejectedField, recordedRejections } from "../runtime/autofill-rejection.js";
+import { approvalNumber, withApprovalNumber } from "../runtime/autofill-replay-approval.js";
 import {
   armStep,
   type AutofillHooks,
@@ -220,7 +221,7 @@ const unansweredStep = (h: AutofillHost, unanswered: Unanswered) => {
  */
 export const makeSignInRecorder = (input: {
   readonly browser: SignInBrowser<never> &
-    Pick<SignInReplayBrowser<Error>, "markerVisible" | "open">;
+    Pick<SignInReplayBrowser<Error>, "markerVisible" | "approvalNumber" | "open">;
   readonly login: SignInLogin<MintFailure>;
   readonly ask: InputAsker;
   readonly secrets: RunSignInSecrets;
@@ -282,6 +283,7 @@ export const makeSignInRecorder = (input: {
       ),
     open: (url) => browser.open(url),
     markerVisible: (selector, page, popup) => browser.markerVisible(selector, page, popup),
+    ...(browser.approvalNumber === undefined ? {} : { approvalNumber: browser.approvalNumber }),
   };
 
   /** Sign-ins whose screens reached the site; a verified one publishes while it is the latest. */
@@ -633,6 +635,11 @@ export const makeSignInRecorder = (input: {
         ...(step.popup === undefined ? {} : { popup: step.popup }),
       });
       if ("outcome" in screen) return { result: { approved: false, failed: screen.reason } };
+      // A device approval may have the owner pick the number its screen shows (`matchSelector`).
+      const number =
+        step.approval === "device"
+          ? yield* approvalNumber(hooks, step.matchSelector, screen.page, step.popup)
+          : undefined;
       const answered = yield* Effect.either(
         input.ask({
           id: randomUUID(),
@@ -644,7 +651,10 @@ export const makeSignInRecorder = (input: {
               prompt:
                 step.approval === "email_link"
                   ? "Open the sign-in link the site emailed you, then confirm here."
-                  : "Approve the site's sign-in request on your device, then confirm here.",
+                  : withApprovalNumber(
+                      "Approve the site's sign-in request on your device, then confirm here.",
+                      number,
+                    ),
             },
           ],
         }),
@@ -660,6 +670,9 @@ export const makeSignInRecorder = (input: {
         page: screen.page,
         fields: [],
         approval: step.approval,
+        ...(step.approval === "device" && step.matchSelector !== undefined
+          ? { matchSelector: step.matchSelector }
+          : {}),
         ...(step.popup === undefined ? {} : { popup: step.popup }),
       });
       return {
