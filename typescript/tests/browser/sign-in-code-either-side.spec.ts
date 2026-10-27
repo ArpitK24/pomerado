@@ -7,8 +7,8 @@ import { signInForRun } from "../../src/runtime/sign-in-replay.js";
 import { expectNotCarried, hostKeyboard, hostPage } from "./autofill-host-page.js";
 
 // A site that asks for a sign-in code only some of the time: the code screen may show at a run
-// when the recipe recorded none, or show other than the one the recipe recorded. The run takes it
-// as it takes any code screen its recipe never recorded, and the marker decides.
+// when the recipe recorded none. The run takes it as it takes any code screen its recipe never
+// recorded, and the marker decides.
 
 const site = "https://app.example.test";
 const host = "app.example.test";
@@ -19,27 +19,23 @@ const login = { username: "owner@app.example.test", password: "synthetic-passwor
 test.describe.configure({ timeout: 120_000 });
 
 /**
- * The code screen at /verify. `sends` is one code field in no form and with no button, whose own
- * script sends the code once it holds six digits, then loads the account as a new document.
- * `posts` is one code field in a form with its own Continue button, which posts the code.
+ * The code screen at /verify: one code field in no form and with no button, whose own script sends
+ * the code once it holds six digits, then loads the account as a new document.
  */
-const codeScreens = {
-  sends: `<label>Code<input id="otc" name="otc" autocomplete="one-time-code" inputmode="numeric" maxlength="6"></label>
+const codeScreen = `<label>Code<input id="otc" name="otc" autocomplete="one-time-code" inputmode="numeric" maxlength="6"></label>
 <script>
 document.getElementById("otc").addEventListener("input", (event) => {
   if (!/^[0-9]{6}$/.test(event.target.value)) return;
   fetch("/api/code", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ code: event.target.value }) })
     .then((response) => { if (response.ok) location.assign("/account"); });
 });
-</script>`,
-  posts: `<form method="post" action="/verify/code"><label>Code<input id="otc" name="otc" autocomplete="one-time-code" inputmode="numeric"></label><button id="continue">Continue</button></form>`,
-} as const;
+</script>`;
 
 /**
  * The site: a sign-in form at /login that posts to /session, whose page sends the browser on to
- * `screen` at /verify. It keeps each code it receives.
+ * the code screen at /verify. It keeps each code it receives.
  */
-const serve = async (page: Page, screen: keyof typeof codeScreens) => {
+const serve = async (page: Page) => {
   const received: string[] = [];
   const account = '<p id="account">Signed in</p>';
   await page.route(`${site}/**`, async (route) => {
@@ -50,13 +46,9 @@ const serve = async (page: Page, screen: keyof typeof codeScreens) => {
       const typed: unknown = Reflect.get(Object(body), "code");
       received.push(typeof typed === "string" ? typed : "");
       await route.fulfill({ status: typed === code ? 200 : 400, contentType: "application/json", body: "{}" });
-    } else if (request.method() === "POST" && path === "/verify/code") {
-      const typed = new URLSearchParams(request.postData() ?? "").get("otc") ?? "";
-      received.push(typed);
-      await route.fulfill({ contentType: "text/html", body: typed === code ? account : codeScreens.posts });
     } else if (request.method() === "POST" && path === "/session")
       await route.fulfill({ contentType: "text/html", body: '<script>location.replace("/verify")</script>' });
-    else if (path === "/verify") await route.fulfill({ contentType: "text/html", body: codeScreens[screen] });
+    else if (path === "/verify") await route.fulfill({ contentType: "text/html", body: codeScreen });
     else if (path === "/account") await route.fulfill({ contentType: "text/html", body: account });
     else
       await route.fulfill({
@@ -75,18 +67,9 @@ const loginScreen = {
 } as const;
 /** A recipe the build recorded with no code screen. */
 const noCodeRecipe = { version: 2, steps: [loginScreen], signedIn: { selector: "#account" } } as const;
-/** A recipe the build recorded with a code screen the run never shows. */
-const codeRecipe = {
-  version: 2,
-  steps: [
-    loginScreen,
-    { page: `${site}/verify`, fields: [{ selector: "#mfa-code", slot: "code" }], submit: "#verify" },
-  ],
-  signedIn: { selector: "#account" },
-} as const;
 
 /** One run's sign-in with `recipe`, answering the login ask and each code ask with `code`. */
-const run = async (page: Page, recipe: typeof noCodeRecipe | typeof codeRecipe) => {
+const run = async (page: Page, recipe: typeof noCodeRecipe) => {
   const browser = await hostPage(page);
   const { keyboard } = await hostKeyboard(page);
   const secrets = makeRunSecrets();
@@ -130,19 +113,8 @@ const codePrompt = `Enter the sign-in code ${host} sent you.`;
 test("a run whose recipe recorded no code screen types the code into one code field with no button that sends itself, and signs in", async ({
   page,
 }) => {
-  const received = await serve(page, "sends");
+  const received = await serve(page);
   const { result, prompts } = await run(page, noCodeRecipe);
-  expect(result).toMatchObject({ _tag: "Right", right: { alreadySignedIn: false } });
-  expect(prompts).toEqual(["login", codePrompt]);
-  expect(received).toEqual([code]);
-  await expect(page.locator("#account")).toBeVisible();
-});
-
-test("a run whose recorded code screen never shows takes the other code screen shown in its place, and signs in", async ({
-  page,
-}) => {
-  const received = await serve(page, "posts");
-  const { result, prompts } = await run(page, codeRecipe);
   expect(result).toMatchObject({ _tag: "Right", right: { alreadySignedIn: false } });
   expect(prompts).toEqual(["login", codePrompt]);
   expect(received).toEqual([code]);

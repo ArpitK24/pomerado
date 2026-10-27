@@ -450,8 +450,9 @@ const unrecordedCode = <E extends YieldableError, V extends string, L extends Au
     replay.progress.unrecordedCodeScreen = codeScreenOf(found.inspection);
     const before = replay.progress.ran.length;
     const failed = yield* replay.runStep(found.step, found.inspection);
-    if (failed === undefined) return "ran" as const;
-    if (replay.sent.maySent.has("code") || replay.state.filled.has("code")) return failed;
+    if (failed === undefined && replay.sent.maySent.has("code")) return "ran" as const;
+    if (replay.sent.maySent.has("code") || replay.state.filled.has("code"))
+      return failed ?? "sign_in_check_failed";
     replay.progress.ran.splice(before);
     return "none" as const;
   });

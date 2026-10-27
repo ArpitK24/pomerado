@@ -155,18 +155,7 @@ export const findCodeField = <E>(hooks: Pick<AutofillHooks<E>, "inspect">) =>
  * that sends itself once it holds the whole code does: the step has no submit, so the fill types
  * the code, clicks nothing and counts the page's own send (`page`).
  */
-export const selfSendingCodeStep: AutofillStep = { fields: unrecordedCodeStep.fields };
-
-/** A code screen the look found: the step that takes it, and that step's inspection. */
-export interface FoundCodeScreen {
-  readonly step: AutofillStep;
-  readonly inspection: AutofillInspection;
-}
-
-const codeScreen = (step: AutofillStep, inspection: AutofillInspection): FoundCodeScreen => ({
-  step,
-  inspection,
-});
+const selfSendingCodeStep: AutofillStep = { fields: unrecordedCodeStep.fields };
 
 /**
  * Looks for a code screen the recipe never recorded: the code field and its form's submit
@@ -176,10 +165,10 @@ const codeScreen = (step: AutofillStep, inspection: AutofillInspection): FoundCo
 export const findCodeScreen = <E>(hooks: Pick<AutofillHooks<E>, "inspect">) =>
   Effect.gen(function* () {
     const withSubmit = yield* findCodeField(hooks);
-    if (!("outcome" in withSubmit)) return codeScreen(unrecordedCodeStep, withSubmit);
+    if (!("outcome" in withSubmit)) return { step: unrecordedCodeStep, inspection: withSubmit };
     if (withSubmit.reason !== "not_found" || withSubmit.target !== "submit") return withSubmit;
     const alone = yield* inspectCodeStep(hooks, selfSendingCodeStep);
-    return "outcome" in alone ? alone : codeScreen(selfSendingCodeStep, alone);
+    return "outcome" in alone ? alone : { step: selfSendingCodeStep, inspection: alone };
   });
 
 /**
