@@ -171,6 +171,15 @@ const branchesOf = (schema: Json, root: Json): readonly Json[] => {
     .filter((branch) => branch["type"] !== "null");
 };
 
+/** Whether a schema allows null: by its type, a union branch that does, or `nullable`. */
+const allowsNull = (schema: Json, root: Json): boolean => {
+  const type = schema["type"];
+  if (type === "null" || (Array.isArray(type) && type.includes("null")) || schema["nullable"] === true)
+    return true;
+  const union = schema["anyOf"] ?? schema["oneOf"];
+  return Array.isArray(union) && union.some((branch) => allowsNull(resolved(branch, root), root));
+};
+
 const typeOf = (branch: Json) => {
   const type = branch["type"];
   return typeof type === "string"
@@ -186,6 +195,7 @@ interface Field {
   readonly types: readonly string[];
   /** An array whose items are objects, or not described. */
   readonly listOfRecords: boolean;
+  readonly nullable: boolean;
 }
 
 /** An array branch whose items are objects, or say nothing about their type. */
@@ -220,6 +230,7 @@ const objectFields = (raw: unknown): readonly Field[] => {
       required: required.has(name),
       types: branches.map((branch) => typeOf(branch) ?? "any"),
       listOfRecords: branches.some((branch) => holdsRecords(branch, root)),
+      nullable: allowsNull(field, root),
     };
   });
 };
@@ -266,6 +277,10 @@ const isRecordInput = (field: Field) =>
 /** Where a list read's results sit: `field` of the output, or the output itself when absent. */
 export interface PrimaryList {
   readonly field?: string;
+  /** The output schema allows null at `field`. */
+  readonly nullable?: true;
+  /** The output's other declared fields, set with `nullable`: what a null list's record is judged by. */
+  readonly others?: readonly string[];
 }
 
 /**
@@ -280,20 +295,28 @@ export const primaryListOf = (inputSchema: unknown, outputSchema: unknown): Prim
     if (branchesOf(root, outputSchema).some((branch) => typeOf(branch) === "array")) return {};
   }
   const fields = objectFields(outputSchema);
+  const at = (list: Field): PrimaryList =>
+    list.nullable
+      ? {
+          field: list.name,
+          nullable: true,
+          others: fields.filter((field) => field.name !== list.name).map((field) => field.name),
+        }
+      : { field: list.name };
   const arrays = fields.filter((field) => field.listOfRecords);
   const named = fields.find((field) => field.types.includes("array") && listName.test(field.name));
   const cursor = cursorPairOf(inputSchema, outputSchema);
   if (cursor !== undefined) {
     const list = named ?? arrays[0];
-    return list === undefined ? undefined : { field: list.name };
+    return list === undefined ? undefined : at(list);
   }
   const inputs = objectFields(inputSchema);
   const details =
     inputs.some((field) => field.required && isRecordInput(field)) &&
     !inputs.some((field) => freeTextName.test(field.name));
   if (details) return undefined;
-  if (named !== undefined) return { field: named.name };
-  return arrays.length === 1 && arrays[0] !== undefined ? { field: arrays[0].name } : undefined;
+  if (named !== undefined) return at(named);
+  return arrays.length === 1 && arrays[0] !== undefined ? at(arrays[0]) : undefined;
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -439,18 +462,35 @@ const filled = (value: unknown) =>
   value !== "" &&
   !(Array.isArray(value) && value.length === 0);
 
+interface Shape {
+  readonly empty: boolean;
+  readonly got: string;
+  /** A record whose nullable list is null: a result, and also the no results an empty case expects. */
+  readonly nullList?: true;
+  /** What a result case's failure says in place of the default. */
+  readonly detail?: string;
+}
+
 /**
  * Whether an output holds results: a list read's by its results list, a details read's by its
- * values, so a record whose images or variants happen to be empty is still a result.
+ * values, so a record whose images or variants happen to be empty is still a result. A list the
+ * output schema allows to be null is judged, when null, by the record's other declared values.
  */
-const resultShape = (output: unknown, list: PrimaryList | undefined) => {
+const resultShape = (output: unknown, list: PrimaryList | undefined): Shape => {
   if (output === null || output === undefined) return { empty: true, got: "no output" };
   if (list !== undefined) {
-    const items =
-      list.field === undefined ? output : isRecord(output) ? output[list.field] : undefined;
-    return Array.isArray(items)
-      ? counted(items)
-      : { empty: true, got: list.field === undefined ? "no list" : `no ${list.field} list` };
+    const { field } = list;
+    const items = field === undefined ? output : isRecord(output) ? output[field] : undefined;
+    if (Array.isArray(items)) return counted(items);
+    if (field === undefined || !isRecord(output) || items !== null)
+      return { empty: true, got: field === undefined ? "no list" : `no ${field} list` };
+    return list.nullable === true && (list.others ?? []).some((name) => filled(output[name]))
+      ? { empty: false, got: `a result (no ${field})`, nullList: true }
+      : {
+          empty: true,
+          got: `no ${field} list`,
+          detail: `The tool returned a record whose ${field} is null. If the site lists no ${field} for this input, expect empty for this case, or choose an input the site lists ${field} for.`,
+        };
   }
   if (Array.isArray(output)) return counted(output);
   if (isRecord(output))
@@ -524,7 +564,11 @@ export const judgeCase = (
       const base = { got: shape.got, output: outcome.output };
       if (testCase.expect === "result")
         return shape.empty
-          ? { ...base, verdict: "fail", detail: `${page}Expected results, but the tool returned ${shape.got}.` }
+          ? {
+              ...base,
+              verdict: "fail",
+              detail: `${page}${shape.detail ?? `Expected results, but the tool returned ${shape.got}.`}`,
+            }
           : repeatsPageOne(run, list)
             ? {
                 ...base,
@@ -533,7 +577,7 @@ export const judgeCase = (
               }
             : { ...base, verdict: "pass" };
       if (testCase.expect === "empty")
-        return shape.empty
+        return shape.empty || shape.nullList === true
           ? { ...base, verdict: "pass" }
           : { ...base, verdict: "fail", detail: `${page}Expected no results, but the tool returned ${shape.got}.` };
       return {
@@ -911,8 +955,9 @@ const publishedInputCheck = (
 
 /**
  * What a passing record's run returned, when the record alone fixes it: a refusal, by the error
- * class its verdict kept. A completed run's output is not kept, so it is undefined; a completed
- * run passes another expectation under `judgeCase` only when the two expectations are the same.
+ * class its verdict kept. A completed run's output is not kept, so it is undefined, and a completed
+ * run's pass excuses only a case with the same expectation, though a record whose nullable list
+ * is null passes both `result` and `empty` under `judgeCase`.
  */
 const refusalOutcome = (record: LiveTestRecord): LiveTestOutcome | undefined => {
   if (record.errorClass === undefined) return undefined;

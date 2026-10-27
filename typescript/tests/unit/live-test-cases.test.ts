@@ -133,6 +133,25 @@ describe("judgeCase", () => {
     expect(judgeCase({ expect: "invalid_input" }, completed(record), undefined).verdict).toBe("fail");
   });
 
+  // A reservation lookup whose place takes no online bookings answers with a filled record and no
+  // times list, which its output schema allows.
+  it("judges a filled record whose nullable list is null as a result", () => {
+    const input = object({ place: { type: "string" }, date: { type: "string" } }, ["place", "date"]);
+    const times = { type: "array", items: object({ time: { type: "string" } }) };
+    const output = (list: unknown) =>
+      object({ status: { type: "string" }, address: { type: ["string", "null"] }, available_times: list });
+    const nullable = primaryListOf(input, output({ ...times, type: ["array", "null"] }));
+    const record = { status: "not on the reservation network", address: "1 Main St", available_times: null };
+    expect(judgeCase({ expect: "result" }, completed(record), nullable)).toMatchObject({
+      verdict: "pass",
+      got: "a result (no available_times)",
+    });
+    expect(judgeCase({ expect: "result" }, completed(record), primaryListOf(input, output(times))).verdict).toBe("fail");
+    expect(judgeCase({ expect: "result" }, completed({ status: "", available_times: null }), nullable).detail).toBe(
+      "The tool returned a record whose available_times is null. If the site lists no available_times for this input, expect empty for this case, or choose an input the site lists available_times for.",
+    );
+  });
+
   it("passes a refusal only where one was expected, and a loud failure but not a timeout", () => {
     const refused = {
       id: "case",
