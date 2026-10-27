@@ -155,10 +155,10 @@ attribute.
   - An identifier field lists every kind it accepts in `accepts`, from `username`, `email`,
     `phone` and `account_number`: a "username or email" field is `["username", "email"]`, an
     email-only field `["email"]`, a mobile-number field `["phone"]`, an account, member or customer
-    number field `["account_number"]`. Read the label, type and placeholder. The host sends a kind
-    the login holds (username first, then email, phone and account number) or asks the caller once
-    for one it accepts. If it refuses the step as `identifier_conflict`, the answer was not this login's: send
-    the step again to ask again.
+    number field or a company or organization ID field `["account_number"]`. Read the label, type
+    and placeholder. The host sends a kind the login holds (username first, then email, phone and
+    account number) or asks the caller once for one it accepts. If it refuses the step as
+    `identifier_conflict`, the answer was not this login's: send the step again to ask again.
   - `slot: "password"` for the password.
   - `slot: "code"` for a one-time or authenticator code. A saved authenticator seed answers it;
     otherwise the host asks the caller for the code. Never ask for a code yourself. A code split
