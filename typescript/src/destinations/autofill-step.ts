@@ -142,7 +142,8 @@ export interface AutofillStep<Slot extends FillSlot = AutofillSlot> {
   /**
    * `keyboard`: the host presses the submit from the keyboard rather than clicking it first, as a
    * recorded screen whose submit another element covered was sent (a recipe's `submitVia`). Never
-   * the minter's: a fill presses a covered submit from the keyboard by itself.
+   * the minter's: the host's click again of a `blocked` screen presses a covered submit from the
+   * keyboard by itself.
    */
   readonly submitVia?: "keyboard" | undefined;
 }
@@ -483,12 +484,13 @@ export type AutofillStepReport =
        * `clicked`: the host clicked the submit, or pressed the step's submit key in its last field,
        * counting a click or press that ran out of time while the next page loaded once a request
        * for the page's main frame went out, as a form's submission sends. With `via: "keyboard"`,
-       * another element caught the click, or the step said to (`submitVia`), and the host pressed
-       * Enter on that same submit instead, once focus landed on it.
+       * another element caught the host's click again of a `blocked` screen, or the step said to
+       * (`submitVia`), and the host pressed Enter on that same submit instead, once focus landed
+       * on it.
        * `failed`: the click or press threw before any such request went out.
        * `blocked`: another element sat over the submit and caught the host's click (`blockedBy`),
-       * and focus would not land on the submit for a press from the keyboard, so nothing was sent;
-       * the fields still hold what was typed.
+       * so nothing was sent; the fields still hold what was typed. A fill reports it so; a click
+       * again does only when focus would not land on the submit for a press from the keyboard.
        * `refused`: after the fill the host refused a control where it then sat or submitted.
        * `stayed_disabled`: the submit stayed disabled after the fields were filled, through the
        * host's wait for the page to enable it, so the host never clicked it.

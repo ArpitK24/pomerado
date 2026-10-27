@@ -56,6 +56,12 @@ export interface InsertionOptions {
    * (`phoneDigitsCode`). A read that fails or finds no value answers `inserted`, as without it.
    */
   readonly phone?: true | undefined;
+  /**
+   * Type the text one character at a time, each between a keydown, keypress and keyup on the field,
+   * for a page that reacts only to key presses. The guard holds before each character, so a
+   * refusal after the first may leave part of the text typed.
+   */
+  readonly keys?: true | undefined;
 }
 
 /**
@@ -193,25 +199,44 @@ const findMarkedNode = (
 /**
  * Guard and insertion share this synchronous call on the original DOM object. Native insertion
  * emits a trusted InputEvent without key events. A stale document's object cannot run on a new
- * document; a moved focus never receives a value.
+ * document; a moved focus never receives a value. Typed by keys, each character's key events run
+ * page code, so the guard holds again before the host inserts each character.
  */
-const atomicInsert = `function(key, origin, text) {
+const atomicInsert = `function(key, origin, text, keys) {
   const field = this;
   const binding = field[key];
   field.removeAttribute(key);
   delete field[key];
   if (!binding) return "binding_not_in_world";
   const { document, frame } = binding;
-  if (!field.isConnected) return "detached";
-  if (field.ownerDocument !== document) return "document_changed";
-  if (document.defaultView !== frame || frame.document !== document) return "frame_changed";
-  if (frame.origin !== origin) return "origin_changed";
   const holdsFocus = ${holdsFocusCode};
-  if (!holdsFocus(field)) return "focus_moved";
-  if (!document.hasFocus()) return "document_unfocused";
-  if (binding.questionRequired &&
-      (typeof binding.checkQuestion !== "function" || !binding.checkQuestion())) return "question_changed";
-  return document.execCommand("insertText", false, text) ? "inserted" : "insertion_rejected";
+  const guard = () => {
+    if (!field.isConnected) return "detached";
+    if (field.ownerDocument !== document) return "document_changed";
+    if (document.defaultView !== frame || frame.document !== document) return "frame_changed";
+    if (frame.origin !== origin) return "origin_changed";
+    if (!holdsFocus(field)) return "focus_moved";
+    if (!document.hasFocus()) return "document_unfocused";
+    if (binding.questionRequired &&
+        (typeof binding.checkQuestion !== "function" || !binding.checkQuestion())) return "question_changed";
+  };
+  const refused = guard();
+  if (refused) return refused;
+  if (!keys) return document.execCommand("insertText", false, text) ? "inserted" : "insertion_rejected";
+  for (const char of Array.from(text)) {
+    const keyCode = /^[a-z0-9]$/i.test(char) ? char.toUpperCase().charCodeAt(0) : 0;
+    const press = (type, code = keyCode) => field.dispatchEvent(new KeyboardEvent(type, {
+      key: char, keyCode: code, which: code, charCode: type === "keypress" ? code : 0,
+      bubbles: true, cancelable: true, composed: true,
+    }));
+    if (press("keydown") && press("keypress", char.charCodeAt(0))) {
+      const moved = guard();
+      if (moved) return moved;
+      if (!document.execCommand("insertText", false, char)) return "insertion_rejected";
+    }
+    press("keyup");
+  }
+  return "inserted";
 }`;
 
 const command = (
@@ -342,6 +367,7 @@ export const makeCredentialKeyboard = (
           { value: target.bindingKey },
           { value: target.documentOrigin },
           { value: text },
+          { value: options?.keys === true },
         ],
         returnByValue: true,
       }).pipe(
