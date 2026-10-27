@@ -1210,6 +1210,18 @@ it("asks for an access code with a private secret question", async () => {
   );
 });
 
+// A file collected during a build has no download link, which only a published tool's runs add.
+it("tells the minter a collected file's download link appears only when the published tool runs", async () => {
+  const texts = await renderedTexts("typescript/authoring");
+  const forms = (texts.get("forms") ?? "").replace(/\s+/g, " ");
+  expect(forms).toContain(
+    "see only its name, type, size and sha256. While the tool is being built, the file has no download_url or expires_at; the published tool's runs add them. Prefer returning the file as collected, and never require those fields in code.",
+  );
+  expect(await readFile("typescript/authoring/examples/dates-and-files.ts", "utf8")).toContain(
+    "// download_url and expires_at appear only when the published tool runs; return the file as collected and never require them.\n    return { statement };",
+  );
+});
+
 const sha256 = (text: string) => createHash("sha256").update(text).digest("hex");
 
 /*
@@ -1235,7 +1247,7 @@ it("renders the pinned standalone authoring", async () => {
     ["2bccc1226ee0633bb7c580f8055b194237137fe0d9475b2bcb77aa60c559294a", "auth"],
     ["ad5b4f8391094f6d7c8ff4a480b071bb298807da9523971e0aaf7d719f152664", "testing"],
     ["365d97edddce29df3e03b4351bb7f93e8997e8693648868c88bf34ca37a84e7c", "pagination"],
-    ["f676e98f14b6b16705258272a76acd2b6ddbe6452b9779613a0512d3119bcbca", "forms"],
+    ["c21b3e69771470e4ae72b6c88201a2b6fad8d3eea76f4ebfda47993aeb351448", "forms"],
     ["7308f56f0ac66a427deac277366104e8e6e023aa83debdbd616d22b11ea3f95f", "writes"],
     ["01eb1c98d8945987929ca3d8c68d4d848e64415d2042fc844166a490ca9457cb", "cart"],
     ["c91deddad323e3c996cc3a172812a1cfd2e14eba76f0552264384708c7d13c58", "caller-input"],
