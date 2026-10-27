@@ -200,7 +200,7 @@ const findMarkedNode = (
  * Guard and insertion share this synchronous call on the original DOM object. Native insertion
  * emits a trusted InputEvent without key events. A stale document's object cannot run on a new
  * document; a moved focus never receives a value. Typed by keys, each character's key events run
- * page code, so the guard holds again before each character goes in.
+ * page code, so the guard holds again before the host inserts each character.
  */
 const atomicInsert = `function(key, origin, text, keys) {
   const field = this;
@@ -224,11 +224,16 @@ const atomicInsert = `function(key, origin, text, keys) {
   if (refused) return refused;
   if (!keys) return document.execCommand("insertText", false, text) ? "inserted" : "insertion_rejected";
   for (const char of Array.from(text)) {
-    const press = (type) => field.dispatchEvent(new KeyboardEvent(type, { key: char, bubbles: true, cancelable: true, composed: true }));
-    const typing = press("keydown") && press("keypress");
-    const moved = guard();
-    if (moved) return moved;
-    if (typing && !document.execCommand("insertText", false, char)) return "insertion_rejected";
+    const keyCode = /^[a-z0-9]$/i.test(char) ? char.toUpperCase().charCodeAt(0) : 0;
+    const press = (type, code = keyCode) => field.dispatchEvent(new KeyboardEvent(type, {
+      key: char, keyCode: code, which: code, charCode: type === "keypress" ? code : 0,
+      bubbles: true, cancelable: true, composed: true,
+    }));
+    if (press("keydown") && press("keypress", char.charCodeAt(0))) {
+      const moved = guard();
+      if (moved) return moved;
+      if (!document.execCommand("insertText", false, char)) return "insertion_rejected";
+    }
     press("keyup");
   }
   return "inserted";

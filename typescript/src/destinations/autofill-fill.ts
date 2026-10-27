@@ -800,12 +800,11 @@ const afterFieldCall = (
  * (`InsertionOptions.keys`), for a page that enables it only on key presses, and waits once more.
  * When it still stays disabled the report says so (`stayed_disabled`). A step whose code the host
  * typed one character per box into several code fields is submitted only once every box holds
- * exactly one character; otherwise that box fails and the submit is not attempted. A phone field
- * is read back once typed
- * (`InsertionOptions.phone`): one that kept other digits than the number, as under a country picker
- * set to another country, is `changed`, and the fill types nothing more and never clicks the
- * submit. On a step with fields and no submit, a
- * page that moves on once every field is typed sent what was typed itself (`page`), never a refusal:
+ * exactly one character; otherwise that box fails and the submit is not attempted. A phone field is
+ * read back once typed (`InsertionOptions.phone`): one that kept other digits than the number, as
+ * under a country picker set to another country, is `changed`, and the fill types nothing more and
+ * never clicks the submit. On a step with fields and no submit, a page that moves on once every
+ * field is typed sent what was typed itself (`page`), never a refusal:
  * the step's fields went away or were all disabled, its popup closed, its address moved to another
  * path, or a step of several fields came back emptied. The host gives the page up to `pageSendMs`
  * to do so, and a submit call that fails meanwhile is followed by another look (`submitWhenEnabled`).

@@ -767,8 +767,8 @@ const fillCode = async (page: Page, code: string, onclick: string, action = "/se
   return { report, received, requested };
 };
 
-// A page that enables its submit only on key presses, never on the host's native insertion, gets
-// the code typed again key by key, then clicked once.
+// A page that enables its submit only on digit key presses, read by their legacy `which`, never on
+// the host's native insertion, gets the code typed again key by key, then clicked once.
 test("a code screen whose submit only a keyup enables is typed again key by key and sent once", async ({
   page,
 }) => {
@@ -777,7 +777,7 @@ test("a code screen whose submit only a keyup enables is typed again key by key 
     page,
     `<label>Code<input id="code" name="code" inputmode="numeric"></label>
 <button id="continue" disabled>Verify</button>
-<script>document.getElementById('code').addEventListener('keyup', ({ target }) => { document.getElementById('continue').disabled = !/^[0-9]{6}$/.test(target.value); });</script>`,
+<script>document.getElementById('code').addEventListener('keyup', ({ target, which }) => { if (which >= 48 && which <= 57) document.getElementById('continue').disabled = !/^[0-9]{6}$/.test(target.value); });</script>`,
     false,
   );
   const inspection = await inspect(page, codeStep);
