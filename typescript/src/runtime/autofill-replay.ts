@@ -3,6 +3,7 @@ import type { YieldableError } from "effect/Cause";
 import type { AutofillRecipeStep } from "../destinations/autofill-recipe.js";
 import { resolvedPage, type SignInRecipeStep } from "../destinations/sign-in-recipe.js";
 import type {
+  AutofillInspection,
   AutofillRefusal,
   AutofillSignedInCheck,
   AutofillStep,
@@ -23,9 +24,8 @@ import { approvalNumber, approvalScreen, withApprovalNumber } from "./autofill-r
 import { settleCarried } from "./autofill-replay-fill.js";
 import {
   codeScreenOf,
-  findCodeField,
+  findCodeScreen,
   onSignInOrigin,
-  unrecordedCodeStep,
 } from "./autofill-unrecorded-code.js";
 import {
   cantTell,
@@ -59,6 +59,34 @@ const refusedScreen = <E extends YieldableError, V extends string, L extends Aut
       ...replay.firstCause.evidence(refusal),
     })
     .pipe(Effect.as(replay.outcome(refusal.reason)));
+
+/**
+ * A recorded code screen that never showed within its wait (`not_found`), with neither the marker
+ * nor a later recorded screen in its place: the site asked for no code this time, or showed another
+ * screen. The replay then goes on to its sign-in check, which looks for a code screen the recipe
+ * never recorded, before it ends with the recorded screen's refusal (`replayAutofillRecipe`).
+ */
+const codeScreenMissing = (recorded: SignInRecipeStep, refusal: AutofillRefusal) =>
+  refusal.reason === "not_found" &&
+  recorded.fields.some((field) => "slot" in field && field.slot === "code");
+
+/** A recorded code screen that never showed, with the refusal its wait ended with. */
+interface MissingCodeScreen {
+  readonly codeScreenMissing: AutofillRefusal;
+}
+const missingCodeScreen = (refusal: AutofillRefusal): MissingCodeScreen => ({
+  codeScreenMissing: refusal,
+});
+
+/** A recorded screen shown and admitted, with the step that fills it. */
+interface ShownScreen {
+  readonly step: AutofillStep;
+  readonly inspection: AutofillInspection;
+}
+const shownScreen = (step: AutofillStep, inspection: AutofillInspection): ShownScreen => ({
+  step,
+  inspection,
+});
 
 /** The recorded screen as it runs now: a method choice clicks the method this run picks. */
 const screenFor = <E extends YieldableError, V extends string, L extends AutofillLogin>(
@@ -131,12 +159,15 @@ const awaitRecordedScreen = <E extends YieldableError, V extends string, L exten
     const shown = yield* replay.awaitScreen(step, until, pageOf(replay, recorded), later);
     if (typeof shown === "string")
       return shown === "signed_in" || shown === "skipped" ? shown : replay.outcome(shown);
-    if ("outcome" in shown.found) return yield* refusedScreen(input, replay, shown.found);
+    if ("outcome" in shown.found)
+      return codeScreenMissing(recorded, shown.found)
+        ? missingCodeScreen(shown.found)
+        : yield* refusedScreen(input, replay, shown.found);
     // The screen must sit on its recorded origin or the login's own workspace, not only on the
     // same site: another tenant's login on a shared domain would pass the site check.
     const refused = yield* admitScreen(input, replay, recorded, shown.found.page);
     if (refused !== undefined) return replay.outcome(refused);
-    return { step, inspection: shown.found };
+    return shownScreen(step, shown.found);
   });
 
 /** Resolve and admit the observed recorded screen before any host-filled submission. */
@@ -191,7 +222,8 @@ const runScreen = <E extends YieldableError, V extends string, L extends Autofil
 ) =>
   Effect.gen(function* () {
     const inspected = yield* inspectRecordedScreen(input, replay, recorded, until, later);
-    if (typeof inspected === "string" || "outcome" in inspected) return inspected;
+    if (typeof inspected === "string" || "outcome" in inspected || "codeScreenMissing" in inspected)
+      return inspected;
     const { step } = inspected;
     let { inspection } = inspected;
     // The screen is shown and needs the login: a value-free replay stops before anything is sent.
@@ -267,7 +299,8 @@ const runScreen = <E extends YieldableError, V extends string, L extends Autofil
       // A screen gone under the fill gets a screen's wait of its own, so its hold still runs.
       const by = failed === "submit_stayed_disabled" ? until : now + replay.timing.stepWaitMs;
       const shown = yield* awaitRecordedScreen(input, replay, step, recorded, by, later);
-      if (typeof shown === "string" || "outcome" in shown) return shown;
+      if (typeof shown === "string" || "outcome" in shown || "codeScreenMissing" in shown)
+        return shown;
       inspection = shown.inspection;
     }
     // What a screen on its exact origin sent anchors the login's workspace (`admitScreen`).
@@ -391,7 +424,8 @@ const retryCode = <E extends YieldableError, V extends string, L extends Autofil
 
 /**
  * A code screen the recipe never recorded, looked for once and only while no code may have gone
- * out, so the look never sends a second one (`unrecordedCodeStep`, `onSignInOrigin`). Its code
+ * out, so the look never sends a second one (`findCodeScreen`, `onSignInOrigin`). A code field in
+ * no form with a submit is filled with no submit, so the page's own send counts (`page`). Its code
  * comes as a recorded code screen's does: the host's own, else the owner's answer to the host's
  * question; after it refuses a code, its retries never take the host generator's (see
  * `runReplayStep`). The screen this replay last submitted still showing is the site's
@@ -409,13 +443,13 @@ const unrecordedCode = <E extends YieldableError, V extends string, L extends Au
   Effect.gen(function* () {
     if (probed.current || replay.sent.maySent.has("code")) return "none" as const;
     probed.current = true;
-    const inspected = yield* findCodeField(input.hooks);
-    if ("outcome" in inspected || !onSignInOrigin(replay.signInOrigins(), inspected))
+    const found = yield* findCodeScreen(input.hooks);
+    if ("outcome" in found || !onSignInOrigin(replay.signInOrigins(), found.inspection))
       return "none" as const;
     if (!(yield* lastScreenGone(input, replay))) return "none" as const;
-    replay.progress.unrecordedCodeScreen = codeScreenOf(inspected);
+    replay.progress.unrecordedCodeScreen = codeScreenOf(found.inspection);
     const before = replay.progress.ran.length;
-    const failed = yield* replay.runStep(unrecordedCodeStep, inspected);
+    const failed = yield* replay.runStep(found.step, found.inspection);
     if (failed === undefined) return "ran" as const;
     if (replay.sent.maySent.has("code") || replay.state.filled.has("code")) return failed;
     replay.progress.ran.splice(before);
@@ -506,5 +540,12 @@ export const replayAutofillRecipe = <E extends YieldableError, V extends string,
     if (removeFailureListener) yield* Effect.addFinalizer(() => Effect.sync(removeFailureListener));
     yield* input.hooks.open(input.entryUrl);
     const stopped = yield* runScreens(input, replay);
-    return stopped ?? (yield* settle(input, replay));
+    if (stopped === undefined) return yield* settle(input, replay);
+    if (!("codeScreenMissing" in stopped)) return stopped;
+    // A recorded code screen that never showed: the sign-in check decides, and looks for a code
+    // screen the recipe never recorded. One that signs in, or sends a code, stands; otherwise the
+    // replay ends with the recorded screen's refusal, as before.
+    const settled = yield* settle(input, replay);
+    if (settled.outcome === "signed_in" || replay.sent.maySent.has("code")) return settled;
+    return yield* refusedScreen(input, replay, stopped.codeScreenMissing);
   });
