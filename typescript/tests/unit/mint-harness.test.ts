@@ -1422,6 +1422,47 @@ it("keeps the build open when publication's capture evidence is unavailable, the
   expect(f.seen).toHaveLength(1);
 });
 
+// A host that publishes on the site's own no (`publishOnRefusal`) marks the session's
+// `write_not_submitted` refusal, and the minter hears how to publish on that no instead of only
+// being told to continue the write; an unmarked refusal keeps today's instruction.
+it("tells the minter how to publish on the site's own no only when the host publishes on one", async () => {
+  const answers: unknown[] = [];
+  let publications = 0;
+  const f = await fixture(
+    (turn) =>
+      Effect.gen(function* () {
+        yield* turn.actions.execute(execution);
+        answers.push(JSON.parse(yield* turn.actions.finish(publication)));
+        answers.push(JSON.parse(yield* turn.actions.finish(publication)));
+        answers.push(JSON.parse(yield* turn.actions.finish(publication)));
+      }),
+    {
+      publish: () =>
+        Effect.suspend(() =>
+          publications++ < 2
+            ? Effect.fail(
+                new MintFailure({
+                  code: "PublicationUnavailable",
+                  reason: "write_not_submitted",
+                  ...(publications === 1 ? { publishesOnRefusal: true as const } : {}),
+                }),
+              )
+            : Effect.succeed({ publicationRef: "published-revision", diagnostics: [] }),
+        ),
+    },
+  );
+  expect(await f.run()).toMatchObject({ build: "published" });
+  const [marked = "", unmarked = ""] = answers.map((answer) =>
+    String(Reflect.get(Object(answer), "instruction")),
+  );
+  expect(marked).toContain("write.commitsUnproven");
+  expect(unmarked).not.toContain("write.commitsUnproven");
+  // Past the added rule, both say the same.
+  expect(marked.endsWith(unmarked.slice(unmarked.indexOf(" the remaining authorized work")))).toBe(
+    true,
+  );
+});
+
 // Each publication decision reaches the host as typed evidence, and the minter's answer names it.
 it("records each publication decision, refused and published, through the host's hook", async () => {
   const recorded: PublicationDecision[] = [];

@@ -362,6 +362,59 @@ describe("a write session's publication check", () => {
     );
     expect(Exit.isSuccess(result) && result.value.declared).toBe("unverifiable");
   });
+
+  describe("when the example ended in the site's own declared no, for a host that publishes on it", () => {
+    // A quote form that saves the property, then prices it. For this example the site said no
+    // before the first save, as a product it does not offer at the property's postal code.
+    const declined = Schema.Struct({
+      status: Schema.Literal("refused"),
+      reason: Schema.Literal("not_offered"),
+      site_message: Schema.String,
+    });
+    const quoted = Schema.Struct({ status: Schema.Literal("quoted"), price: Schema.String });
+    const outputSchema = contractJsonSchema(Schema.Union(quoted, declined));
+    const refusedFirst: WriteSessionMarks = {
+      enteredMarks: [],
+      action: "write",
+      possiblySent: false,
+      refused: { reason: "not_offered" },
+    };
+    const path: WritePath = {
+      steps: [
+        { commit: "save_property", does: "Saves the property on a new quote" },
+        { commit: "get_price", does: "Prices the saved quote" },
+      ],
+      ends: "The saved quote's price",
+    };
+    const allUnproven = {
+      ...contract({
+        confirmation: "message",
+        commits: ["save_property", "get_price"],
+        commitsUnproven: ["save_property", "get_price"],
+      }),
+      outputSchema,
+    };
+
+    it("publishes the whole path, every save step unproven, with the refusal as the proven outcome", () => {
+      const published = Effect.runSyncExit(
+        checkWriteSession({
+          session: { steps: [refusedFirst] },
+          step: refusedFirst,
+          extract: Effect.succeed(allUnproven),
+          writePath: path,
+          publishOnRefusal: true,
+        }),
+      );
+      expect(published).toEqual(
+        Exit.succeed({
+          extracted: allUnproven,
+          declared: "message",
+          commitsUnproven: ["save_property", "get_price"],
+          refusal: { reason: "not_offered" },
+        }),
+      );
+    });
+  });
 });
 
 describe("a write build's write path", () => {
