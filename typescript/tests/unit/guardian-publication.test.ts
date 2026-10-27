@@ -1004,6 +1004,14 @@ describe("the publication policy", () => {
     expect(publicationLiveTestsPolicy).not.toContain("a list's empty result");
   });
 
+  // A build cannot make a site's list change, and core fills and tests its own paging fields, so an
+  // unchanged list is no gap.
+  it("counts core's list fields as core's, so an unchanged list is no gap", () => {
+    const rule =
+      "The paging fields core's listOutputFields adds (next_cursor, next_cursor_expires_at, has_more, total_results, list_changed and next_cursor_unavailable) are core's own contract, filled by core's readList and tested in core: a passing next-page case tests the tool's paging, and a list that never changed between a case's calls is no gap, since a build cannot make a site's list change; prefer noting it in the rationale only.";
+    expect(publicationLiveTestsPolicy).toContain(` ${rule} `);
+  });
+
   // A site's own "Remember me" choice left at its default keeps the owner's session for later
   // runs. It is not a safety default, so neither review denies the host's sign-in step over it.
   it("leaves a site's own Remember me choice at its default in both reviews", () => {
