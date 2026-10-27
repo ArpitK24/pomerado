@@ -327,3 +327,71 @@ it("binds no confirmation to a question the review did not allow, or to an answe
   expect(after.decision).toMatchObject({ outcome: "escalate", refusal: "final" });
   expect(requests).toHaveLength(3);
 });
+
+it("keeps an earlier yes bound to the review it answered when the same question is asked again for an edited step", async () => {
+  // S1 is held, the owner confirms it, the agent edits the step (S2), which is held again, and
+  // asks the same question again; the owner never answers that second ask. The last scripted
+  // allow is what a pushback would wrongly reach.
+  const requests = scripted([askOwner, allowQuestion, askOwner, allowQuestion, stillAsks, allowTrust]);
+  const { g } = await heldAndAsked();
+  const original = files.get("operation/trust.mjs")!;
+  files.set("operation/trust.mjs", `${original}\n// Edited after the owner's answer.`);
+  try {
+    const heldAgain = await Effect.runPromise(g.review({ ...trustStep, ...confirmed }, reader));
+    expect(heldAgain.decision.outcome).toBe("escalate");
+    await Effect.runPromise(
+      g.reviewQuestion(
+        { ...trustStep, ...confirmed, entrypoint: "question" },
+        confirmQuestion(heldAgain.reviewId),
+        reader,
+      ),
+    );
+    // The host still holds the first yes under the same id and prompt: it answered S1, not S2.
+    const after = await Effect.runPromise(g.review({ ...trustStep, ...confirmed }, reader));
+    expect(after.decision).toMatchObject({ outcome: "escalate", refusal: "final" });
+    expect(requests).toHaveLength(5);
+  } finally {
+    files.set("operation/trust.mjs", original);
+  }
+});
+
+it("holds a step only on a correctable refusal, never a final one", async () => {
+  const requests = scripted([
+    decision({
+      outcome: "escalate",
+      rationale: "Ticking the trust box saves a lasting choice; ask the owner first.",
+      refusal: "final",
+      refusalGround: "owner_confirmation",
+    }),
+    allowQuestion,
+    stillAsks,
+    allowTrust,
+  ]);
+  const g = guardian();
+  const held = await Effect.runPromise(g.review(trustStep, reader));
+  await Effect.runPromise(
+    g.reviewQuestion(
+      { ...trustStep, entrypoint: "question" },
+      confirmQuestion(held.reviewId),
+      reader,
+    ),
+  );
+  const after = await Effect.runPromise(g.review({ ...trustStep, ...confirmed }, reader));
+  expect(after.decision).toMatchObject({ outcome: "escalate", refusal: "final" });
+  expect(requests).toHaveLength(3);
+});
+
+it("counts the owner's yes only on the page the held step ran on", async () => {
+  const onPage = (path: string): PendingExecution => ({
+    ...trustStep,
+    mintContext: {
+      ...trustStep.mintContext!,
+      currentPage: { origin: "https://shop.example.test", path, capture: "captures/page.json" },
+    },
+  });
+  const requests = scripted([askOwner, allowQuestion, stillAsks, allowTrust]);
+  const { g } = await heldAndAsked(onPage("/sign-in"));
+  const after = await Effect.runPromise(g.review({ ...onPage("/account"), ...confirmed }, reader));
+  expect(after.decision).toMatchObject({ outcome: "escalate", refusal: "final" });
+  expect(requests).toHaveLength(3);
+});

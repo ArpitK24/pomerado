@@ -1120,6 +1120,11 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
         (recovered?.answeredQuestions ?? []).map(({ id, answer }) => [id, answer]),
       );
       /**
+       * The review each confirm question the minter marked with `confirmsReview` named, by the
+       * question's id, once asked: an id names one review, so an answer under it binds to that one.
+       */
+      const confirmAsks = new Map<string, string>();
+      /**
        * Whether the owner's latest request_input kept an answer Guardian reads, with no other call
        * through the turn's actions since: what `owner_ended` stands on. A secret or sign-in answer
        * is never kept.
@@ -6544,6 +6549,20 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                   userInputRequired: false,
                   instruction: `confirmsReview names the reviewId of an execution step Guardian refused in this build, and ${unheld.map(({ reviewId }) => reviewId).join(", ")} is none. Set it to the reviewId from that step's review_rejected result, or leave it out, and ask again.`,
                 });
+              // A yes binds to the one review its question named: an id the owner already answered,
+              // or one asked for another review, would let an earlier answer stand for this ask.
+              const reused = confirms.filter(
+                ({ questionId, reviewId }) =>
+                  answeredQuestions.has(questionId) ||
+                  (confirmAsks.get(questionId) ?? reviewId) !== reviewId,
+              );
+              if (reused.length > 0)
+                return JSON.stringify({
+                  status: "question_refused",
+                  reason: "confirms_question_reused",
+                  userInputRequired: false,
+                  instruction: `A confirm question with confirmsReview needs an id of its own: ${reused.map(({ questionId }) => questionId).join(", ")} already holds an answer or asked about another refusal. Give it a new id and ask again.`,
+                });
               const proposed = callerVisibleRequest(
                 {
                   ...decoded,
@@ -6686,6 +6705,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                       : "Reword the question using the rationale, or withdraw it and continue. Do not ask again for a value you were already given or that the site shows. A reworded question is reviewed again.",
                   });
               }
+              for (const { questionId, reviewId } of confirms) confirmAsks.set(questionId, reviewId);
               askingId = requestId;
               askingEndsBuild = endsBuild.size > 0;
               handedBackQuestion = undefined;

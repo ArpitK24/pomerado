@@ -23,14 +23,15 @@ export interface HeldStepQuestion extends ConfirmedStepQuestion {
 
 /**
  * What one step is, for telling whether the owner confirmed it: its entrypoint, purpose and
- * target, its screened input, and the screened text of each file it loads (the entrypoint and the
- * host's import closure). Undefined when a file cannot be read whole, so a step whose code cannot
+ * target, its screened input, the page the host last observed it on (origin and path), and the
+ * screened text of each file it loads (the entrypoint and the host's import closure). Undefined when a file cannot be read whole, so a step whose code cannot
  * be compared never matches a confirmation.
  */
 export const stepIdentity = (
   pending: PendingExecution,
   readSource: ReviewTurn["readSource"],
 ): Effect.Effect<string | undefined> => {
+  const page = pending.mintContext?.currentPage;
   const paths = [
     ...new Set([pending.entrypoint, ...(pending.mintContext?.executedSources ?? [])]),
   ].sort();
@@ -47,6 +48,7 @@ export const stepIdentity = (
                 purpose: pending.mintContext?.currentExecution?.purpose ?? null,
                 target: pending.mintContext?.currentExecution?.target ?? null,
                 input: pending.screenedInput,
+                page: page === undefined ? null : [page.origin, page.path],
                 files: paths.map((path, index) => [path, texts[index]]),
               }),
               "utf8",
@@ -70,8 +72,15 @@ export const stepIdentity = (
 export const makeOwnerConfirmations = () => {
   /** Each held step's identity and the holding review's rationale, by that review's id. */
   const held = new Map<string, { readonly step: string; readonly rationale: string }>();
-  /** Each allowed confirm question's prompt and the review whose step it confirms, by its id. */
-  const questions = new Map<string, { readonly prompt: string; readonly reviewId: string }>();
+  /**
+   * Each allowed confirm question's prompt and the review whose step it confirms, by its id. An id
+   * asked again for another review or prompt, or first asked after an answer under that id, is
+   * spent: no answer under it binds, so an earlier yes never confirms a step it did not answer.
+   */
+  const questions = new Map<
+    string,
+    { readonly prompt: string; readonly reviewId: string } | "spent"
+  >();
   return {
     hold: (reviewId: string, step: string, rationale: string) => {
       held.set(reviewId, { step, rationale });
@@ -87,23 +96,40 @@ export const makeOwnerConfirmations = () => {
           ? []
           : [{ questionId, reviewId, rationale: step.rationale }];
       }),
-    /** Records the confirm questions a question review allowed. */
+    /**
+     * Records the confirm questions a question review allowed, each bound to one review for good.
+     * `answered` is the host's answers when the question was reviewed.
+     */
     asked: (
       candidate: NonNullable<PendingExecution["questionCandidate"]>,
       bound: readonly HeldStepQuestion[],
+      answered: PendingExecution["answeredQuestions"] = [],
     ) => {
       for (const { questionId, reviewId } of bound) {
         const question = candidate.questions.find((asked) => asked.id === questionId);
-        if (question !== undefined)
-          questions.set(questionId, { prompt: question.prompt, reviewId });
+        if (question === undefined) continue;
+        const earlier = questions.get(questionId);
+        if (earlier === undefined)
+          questions.set(
+            questionId,
+            answered.some(({ id }) => id === questionId)
+              ? "spent"
+              : { prompt: question.prompt, reviewId },
+          );
+        else if (
+          earlier === "spent" ||
+          earlier.reviewId !== reviewId ||
+          earlier.prompt !== question.prompt
+        )
+          questions.set(questionId, "spent");
       }
     },
     /** Whether any allowed confirm question could bind, so a review without one reads nothing. */
     pending: (pending: PendingExecution) =>
-      questions.size > 0 &&
-      (pending.answeredQuestions ?? []).some(
-        ({ id }) => id !== undefined && questions.has(id),
-      ),
+      (pending.answeredQuestions ?? []).some(({ id }) => {
+        const asked = id === undefined ? undefined : questions.get(id);
+        return asked !== undefined && asked !== "spent";
+      }),
     /**
      * The owner's yes that confirms the step whose identity is `step`: an answer, by the host, to
      * an allowed confirm question with the same id and prompt, that confirms, for the step its
@@ -115,6 +141,7 @@ export const makeOwnerConfirmations = () => {
         if (
           id === undefined ||
           asked === undefined ||
+          asked === "spent" ||
           asked.prompt !== question ||
           typeof answer !== "object" ||
           Array.isArray(answer) ||

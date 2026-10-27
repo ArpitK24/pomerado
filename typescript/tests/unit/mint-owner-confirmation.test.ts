@@ -264,3 +264,27 @@ it("refuses a confirm question that names no refusal of this build", async () =>
   expect(host.asked).toHaveLength(0);
   expect(JSON.stringify(f.requests[1]?.input)).toContain("confirms_unknown_review");
 });
+
+it("refuses a confirm question that reuses the id of a question the owner already answered", async () => {
+  // The last scripted allow is what a second review of the reused question would reach.
+  const host = guardianHost([
+    askOwner,
+    decision({ outcome: "allow_business", rationale: "Only the owner decides." }),
+    decision({ outcome: "allow_business", rationale: "Only the owner decides." }),
+  ]);
+  const f = await fixture(
+    (request, index) =>
+      [
+        call("execute", trustStep, "trust_1"),
+        call("request_input", confirmQuestion(refusedReviewId(request)), "ask_1"),
+        call("request_input", confirmQuestion(refusedReviewId(request)), "ask_2"),
+      ][index] ?? prose("Stopping."),
+    host.dependencies,
+    { effect: "read" },
+  );
+  await f.run();
+  // The second ask never reaches review or the owner: its id already holds the owner's answer.
+  expect(host.reviews).toHaveLength(2);
+  expect(host.asked).toHaveLength(1);
+  expect(JSON.stringify(f.requests[3]?.input)).toContain("confirms_question_reused");
+});

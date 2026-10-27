@@ -1639,13 +1639,15 @@ export const makeGuardian = (
         );
         if (requireEntrypoint && decision.outcome === "allow" && entrypointReadAt !== epoch())
           return yield* new ReviewFailure({ code: "EntrypointNotRead" });
-        // A refusal that asks for the owner's confirmation holds this step for it, unless the
-        // owner already confirmed it; an allowed confirm question that names it records the ask.
+        // A correctable refusal that asks for the owner's confirmation holds this step for it,
+        // unless the owner already confirmed it; an allowed confirm question that names it records
+        // the ask. A final refusal holds nothing: no answer gets past it.
         const rationale: unknown = Reflect.get(decision, "rationale");
         if (
           kind === "execution" &&
           confirmedStep === undefined &&
           (decision.outcome === "deny" || decision.outcome === "escalate") &&
+          Reflect.get(decision, "refusal") === "correctable" &&
           typeof raw === "object" &&
           raw !== null &&
           Reflect.get(raw, "refusalGround") === "owner_confirmation" &&
@@ -1659,7 +1661,7 @@ export const makeGuardian = (
           pending.questionCandidate !== undefined &&
           heldQuestions.length > 0
         )
-          confirmations.asked(pending.questionCandidate, heldQuestions);
+          confirmations.asked(pending.questionCandidate, heldQuestions, pending.answeredQuestions);
         yield* emit(
           "guardian.completed",
           privateKind
