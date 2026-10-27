@@ -2,7 +2,7 @@ import { expect, test } from "@playwright/test";
 import type { Page } from "playwright";
 import { Effect } from "effect";
 import { inspectAutofillStep, type AutofillStep } from "../../src/destinations/autofill-step.js";
-import { fillAutofillStep } from "../../src/destinations/autofill-fill.js";
+import { fillAutofillStep, resubmitAutofillStep } from "../../src/destinations/autofill-fill.js";
 import { hostKeyboard, hostPage } from "./autofill-host-page.js";
 
 // A fixed footer that sits over a sign-in form's Log In button catches the host's click, and has
@@ -46,13 +46,18 @@ ${script}</script></body>`,
   return received;
 };
 
-const fill = async (page: Page) => {
+const inspect = async (page: Page) => {
   const hosted = await hostPage(page);
-  const { keyboard } = await hostKeyboard(page);
   const inspection = await Effect.runPromise(
     inspectAutofillStep({ step: signInStep, page: hosted, siteOrigin: site, authenticationOrigins: [] }),
   );
   if ("outcome" in inspection) throw new Error(`Inspection refused: ${inspection.reason}`);
+  return { hosted, inspection };
+};
+
+const fill = async (page: Page) => {
+  const { hosted, inspection } = await inspect(page);
+  const { keyboard } = await hostKeyboard(page);
   return Effect.runPromise(
     fillAutofillStep({
       step: signInStep,
@@ -65,16 +70,35 @@ const fill = async (page: Page) => {
   );
 };
 
-test("a fixed footer over Log In catches the host's click: the host presses that same Log In from the keyboard and signs in, clicking nothing on the footer; a Log In that focus never lands on stays blocked", async ({
+/** The host's click again of the blocked screen, sent again unchanged, typing nothing. */
+const clickAgain = async (page: Page) => {
+  const { hosted, inspection } = await inspect(page);
+  return Effect.runPromise(
+    resubmitAutofillStep({ step: signInStep, inspection, page: hosted, settleMs: 1_000 }),
+  );
+};
+
+const filled = [
+  { slot: "username", status: "filled" },
+  { slot: "password", status: "filled" },
+];
+
+test("a fixed footer over Log In catches the host's click: the fill reports it blocked by the footer, and the screen sent again presses that same Log In from the keyboard and signs in, clicking nothing on the footer; a Log In that focus never lands on stays blocked", async ({
   page,
 }) => {
+  // Four clicks the footer catches, each through Playwright's full 5 s click timeout.
+  test.setTimeout(60_000);
   const received = await serve(page);
   expect(await fill(page)).toMatchObject({
     outcome: "filled",
-    fields: [
-      { slot: "username", status: "filled" },
-      { slot: "password", status: "filled" },
-    ],
+    fields: filled,
+    submit: "blocked",
+    blockedBy: { tag: "footer", role: null },
+  });
+  expect(received).toEqual([]);
+  expect(await clickAgain(page)).toMatchObject({
+    outcome: "filled",
+    fields: filled,
     submit: "clicked",
     via: "keyboard",
   });
@@ -87,7 +111,8 @@ test("a fixed footer over Log In catches the host's click: the host presses that
     unfocused,
     'document.getElementById("log-in").addEventListener("focus", (event) => event.target.blur());',
   );
-  expect(await fill(unfocused)).toMatchObject({
+  expect(await fill(unfocused)).toMatchObject({ outcome: "filled", submit: "blocked" });
+  expect(await clickAgain(unfocused)).toMatchObject({
     outcome: "filled",
     submit: "blocked",
     blockedBy: { tag: "footer", role: null },

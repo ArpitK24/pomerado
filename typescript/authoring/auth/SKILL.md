@@ -101,6 +101,16 @@ Continue control as `signInStep: { fields: [], submit: "the-observed-selector" }
 navigation needed for sign-in; exploration before the login URL and Business account actions,
 registration and password reset do not belong in the recipe.
 
+A sign-in by phone number may lead, right after its code, to a create-account screen asking at
+most a name and a terms box, because that phone has no account on the site. Prefer asking the
+owner once with `request_input` whether to create it, naming the site and saying the phone has no
+account, and ask for the name in the same request when the screen asks one. With a yes, fill only
+that screen in an `explore`, with the name from the answer and any terms box it requires, submit it
+once and keep it out of the recipe; then send the signed-in check, or sign in again by the
+recorded steps when the site leaves you signed out. With a no, end with `report_blocked` reason
+`owner_declined`. Only builds and repairs do this: a run whose phone has no account fails its
+sign-in.
+
 Record a field only after observing its unique visible enabled match in the intended frame and
 form, and a submit after observing its unique visible match there, even one the page enables only
 once the fields hold input. The host validates the live login; a signed-out replay is verified
@@ -155,10 +165,10 @@ attribute.
   - An identifier field lists every kind it accepts in `accepts`, from `username`, `email`,
     `phone` and `account_number`: a "username or email" field is `["username", "email"]`, an
     email-only field `["email"]`, a mobile-number field `["phone"]`, an account, member or customer
-    number field `["account_number"]`. Read the label, type and placeholder. The host sends a kind
-    the login holds (username first, then email, phone and account number) or asks the caller once
-    for one it accepts. If it refuses the step as `identifier_conflict`, the answer was not this login's: send
-    the step again to ask again.
+    number field or a company or organization ID field `["account_number"]`. Read the label, type
+    and placeholder. The host sends a kind the login holds (username first, then email, phone and
+    account number) or asks the caller once for one it accepts. If it refuses the step as
+    `identifier_conflict`, the answer was not this login's: send the step again to ask again.
   - `slot: "password"` for the password.
   - `slot: "code"` for a one-time or authenticator code. A saved authenticator seed answers it;
     otherwise the host asks the caller for the code. Never ask for a code yourself. A code split
@@ -315,8 +325,9 @@ refuses a third unchanged-password send.
 
 Flows vary. A login may be passwordless (identifier, then a code or a link), ask for a code after the
 password, offer several code methods, or ask you to approve on another device. Record every screen
-the sign-in shows, a code screen included: the tool's runs replay only the screens you recorded and
-never look for another, so a run that meets a screen you did not record requests sign-in repair.
+the sign-in shows, a code screen included. The tool's runs replay the screens you recorded and go
+on when one does not show. Of the screens you did not record, they look only for a one-time code
+screen, so a run that meets any other screen you did not record requests sign-in repair.
 Some sites answer the password with a screen that asks for it again together with a one-time
 code, the password field empty beside the code field: map that screen as one `signInStep` with
 both fields. The host fills the password there once more, records that the screen asks for it
