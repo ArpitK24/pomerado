@@ -137,11 +137,11 @@ export type ClearThenResubmit<E = unknown, V extends string = string> = (
 ) => Effect.Effect<Effect.Effect.Success<ChallengeGate<V>>, E>;
 
 /**
- * A screen's wait at its deadline. A screen still missing then may sit behind a challenge the site
- * put up after the last submit, which no change to the recipe gets past: before the replay ends on
- * it, a host with a challenge look (`challenge`) looks at the page and works a challenge it
+ * A screen's wait at its deadline (`due`). A screen still missing then may sit behind a challenge
+ * the site put up after the last submit, which no change to the recipe gets past: before the replay
+ * ends on it, a host with a challenge look (`challenge`) looks at the page and works a challenge it
  * confirms there. A cleared challenge may first let the screen the replay last submitted be sent
- * again (`resubmit`), before the wait's next check would read that screen showing again as the
+ * again (`resubmit`), before the wait's next deadline would read that screen showing again as the
  * site's answer (`credential_screen_returned`), then gives the awaited screen its own wait again;
  * one the host could not clear ends the replay as `challenge_unsolved`, its vendor kept in
  * `progress`.
@@ -153,9 +153,9 @@ const atDeadline =
     stepWaitMs: number,
     resubmit: ClearThenResubmit<E, V>,
   ) =>
-  (missing: AutofillRefusal, until: number, awaited: AutofillStep) =>
+  (missing: AutofillRefusal, until: number, awaited: AutofillStep, due: boolean) =>
     Effect.gen(function* () {
-      if ((yield* Clock.currentTimeMillis) < until) return { until } as const;
+      if (!due) return { until } as const;
       const challenge =
         missing.reason === "not_found" && hooks.challenge !== undefined
           ? yield* resubmit(hooks.challenge, awaited)
@@ -354,7 +354,7 @@ export const makeReplayScreenWait = <
   progress: ScreenWaitProgress<V>,
   timing: AutofillReplayTiming,
   resolve: (request: AutofillStepRequest) => AutofillStep,
-  rejection?: () => Effect.Effect<Rejection | undefined, E>,
+  rejection?: (due: boolean) => Effect.Effect<Rejection | undefined, E>,
   resubmit: ClearThenResubmit<E, V> = (gate) => gate,
   screens: ReplayScreens = exactScreens(input.recipe.steps),
 ) => {
@@ -369,6 +369,7 @@ export const makeReplayScreenWait = <
     currentPage: RecordedPage,
     later: readonly AutofillRecipeStep[],
     alternatives: readonly AutofillStep[],
+    due: boolean,
   ) =>
     Effect.gen(function* () {
       const inspected = yield* inspectSettled(input, step);
@@ -382,7 +383,7 @@ export const makeReplayScreenWait = <
       )
         return { found: inspected } as const;
       if (rejection !== undefined) {
-        const rejected = yield* rejection();
+        const rejected = yield* rejection(due);
         if (rejected === "extra_retried") return rejected;
         if (rejected !== undefined) return rejected;
       }
@@ -420,7 +421,8 @@ export const makeReplayScreenWait = <
       let waitUntil = until;
       const held = holdShown(input, progress, timing);
       while (true) {
-        const stage = yield* inspectStage(step, current, later, alternatives);
+        const due = (yield* now) >= waitUntil;
+        const stage = yield* inspectStage(step, current, later, alternatives, due);
         if (stage === "extra_retried") continue;
         if (typeof stage === "string") return stage;
         if (yield* held(step, stage.found, waitUntil)) continue;
@@ -446,7 +448,7 @@ export const makeReplayScreenWait = <
         }
         // A bounded wait without observed progress stops the replay; a page error at once.
         if (stage.pageError !== undefined) return { found: inspected } as const;
-        const next = yield* deadline(inspected, waitUntil, step);
+        const next = yield* deadline(inspected, waitUntil, step, due);
         if ("end" in next) return next.end;
         waitUntil = next.until;
         yield* Effect.sleep(Duration.millis(timing.pollMs));
