@@ -3864,3 +3864,53 @@ it("never holds a published Playwright version back on an HTTP version's failing
   expect(guardian.events).toEqual(["guardian.started", "guardian.completed:allow"]);
   expect(outcome.build).toBe("published");
 });
+
+// A live test batch since the host refused a submission is new evidence, so the same submission
+// sent again after a later finish_build got past that refusal is a new refusal, which a
+// host_refused report stands on.
+it("counts a host refusal of a resent submission after a live test batch since as a new refusal", async () => {
+  const { file, outcomes } = scoredBatch({ pass: 7, fail: 0 });
+  const { host, batches } = liveTestHost(outcomes);
+  const refusals = [
+    new MintFailure({ code: "PublicationUnavailable", reason: "autofill_recipe_not_verified" }),
+    new MintFailure({
+      code: "ReviewDenied",
+      review: {
+        outcome: "deny",
+        reason: "source_correction",
+        reviewId: "review_correction",
+        rationale: "Read the price from the result row.",
+        findings: [],
+      },
+    }),
+    new MintFailure({ code: "PublicationUnavailable", reason: "autofill_recipe_not_verified" }),
+  ];
+  let published = 0;
+  const explanation = "A Pomerado check refused publication, so no tool was published.";
+  const f = await fixture(
+    (_request, index) =>
+      [
+        call("live_tests", runAll, "run"),
+        call("execute", example, "example"),
+        call("finish_build", finish, "refused"),
+        call("finish_build", { ...finish, coverage: "Reviewed again." }, "denied"),
+        call("live_tests", runAll, "again"),
+        call("finish_build", finish, "resent"),
+        call("report_blocked", { reason: "host_refused", explanation }, "blocked"),
+      ][index] ?? prose(),
+    {
+      liveTests: host,
+      deadline: Deadline.after(30 * 60_000),
+      reviewAndExecute: completedExample,
+      publish: () => Effect.fail(refusals[published++] ?? refusals[0]!),
+    },
+    read,
+  );
+  const root = (f.workspace as unknown as { root: string }).root;
+  await writeWorkspace(root, { "src/tool.ts": toolSource, "test/cases.json": JSON.stringify(file) });
+  const outcome = await f.run();
+  expect(batches).toHaveLength(2);
+  expect(published).toBe(3);
+  expect(resultOf(f.requests[6], "resent")).toMatchObject({ reason: "autofill_recipe_not_verified" });
+  expect(outcome.blocked).toEqual({ reason: "host_refused", explanation });
+});
