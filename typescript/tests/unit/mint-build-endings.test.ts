@@ -2387,6 +2387,28 @@ it("points a write build that goes on signed out to its act steps", async () => 
   expect(applied).not.toContain("live tests");
 });
 
+// The same holds for a write whose host let it give its sign-in up: what it does next is its act
+// steps, never a read's example and live tests.
+it("points a write build that gave its sign-in up to its act steps", async () => {
+  const f = await fixture(
+    (_request, index) =>
+      [
+        call("execute", authenticate),
+        call("abandon_sign_in", { intent: "The site offers the task without an account." }),
+      ][index] ?? prose("Stopping."),
+    {
+      reviewAndExecute: () => Effect.fail(failedSignIn),
+      abandonSignIn: () => Effect.succeed({ outcome: "abandoned" as const }),
+    },
+    { effect: "write", siteOrigin: "https://shop.example.test" },
+  );
+  await f.run();
+  const abandoned = lastResult(f.requests[2]);
+  expect(abandoned).toContain("sign_in_abandoned");
+  expect(abandoned).toContain("purpose act");
+  expect(abandoned).not.toContain("live tests");
+});
+
 const harnessFixture = makeMintHarnessFixture(
   cleanups,
   { mode: "mint", intent: "Read public data", businessInput: {}, observations: [] },
