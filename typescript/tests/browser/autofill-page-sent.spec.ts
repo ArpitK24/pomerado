@@ -468,14 +468,16 @@ test("code boxes in a form with a button are filled and the host clicks it", asy
   expect(sent).toEqual([]);
 });
 
-test("code boxes in a form with a button whose submit call fails report the failed call after that one call", async ({
+test("code boxes in a form with a button whose submit call fails report the failed call once a look that clicks nothing finds them as they were", async ({
   page,
 }) => {
   const { sent, posted } = await serve(page, form());
   const submits = { count: 0 };
   const report = await fill(page, formStep, [...code], { wrap: firstSubmitFails(submits) });
   expect(report).toMatchObject({ outcome: "uncertain", reason: "fill_call_failed", typed: true });
-  expect(submits.count).toBe(1);
+  // The host looked again and found the code screen as it was, so the failed call stands. A look
+  // never clicks: the form never went out.
+  expect(submits.count).toBeGreaterThan(1);
   expect(posted).toEqual([]);
   expect(sent).toEqual([]);
 });
@@ -967,3 +969,60 @@ for (const [leaves, name] of [
     expect(posted).toEqual([]);
     expect(sent).toEqual([]);
   });
+
+/**
+ * A code screen of four one-character boxes and a "Next" button whose own script signs in as the
+ * last box takes its digit, before the host clicks: it empties the boxes, sends the code itself and,
+ * once the site answered, loads the signed-in page as a new document.
+ */
+const pinCode = "4826";
+const pinBoxes = [1, 2, 3, 4]
+  .map(
+    (box) =>
+      `<input id="pin-${box}" name="p${box}" maxlength="1" inputmode="numeric" aria-label="Digit ${box}">`,
+  )
+  .join("");
+const signsInOnLastBox = `<form id="pin-form" action="/verify/code" method="post">${pinBoxes}<button id="next">Next</button></form><script>
+const pins = [...document.querySelectorAll("#pin-form input")];
+pins.forEach((pin, index) => pin.addEventListener("input", () => {
+  if (pin.value !== "" && pins[index + 1]) pins[index + 1].focus();
+  const typed = pins.map((each) => each.value).join("");
+  if (!/^[0-9]{4}$/.test(typed)) return;
+  pins.forEach((each) => { each.value = ""; });
+  fetch("/api/code", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ code: typed }) })
+    .then(() => location.assign("/account"));
+}));
+</script>`;
+const nextStep: AutofillStep = {
+  fields: [1, 2, 3, 4].map((box) => ({ selector: `#pin-${box}`, slot: "code" as const })),
+  submit: "#next",
+};
+
+test("a code screen with a button that empties its boxes as the last one takes its digit, then loads the signed-in page as a new document, is reported sent by the page with every box filled", async ({
+  page,
+}) => {
+  const { sent, posted, release } = await serve(page, signsInOnLastBox);
+  // The site answers only once the host's first submit call found the boxes emptied, so the
+  // signed-in page loads while the host still looks.
+  const answeredAfterFirstCall = (host: AutofillPage): AutofillPage => ({
+    ...host,
+    execute: (script, timeout) =>
+      script.includes("guardCall")
+        ? host.execute(script, timeout).pipe(Effect.tap(() => Effect.sync(release)))
+        : host.execute(script, timeout),
+  });
+  const report = await fill(page, nextStep, [...pinCode], {
+    wrap: answeredAfterFirstCall,
+    settleMs: 5_000,
+  });
+  expect(report).toMatchObject({
+    outcome: "filled",
+    fields: nextStep.fields.map(() => ({ slot: "code", status: "filled" })),
+    submit: "page",
+  });
+  expect(maySend(report)).toBe(true);
+  expect(report).not.toHaveProperty("clicked");
+  await expect(page.locator("#account")).toBeVisible();
+  expect(sent).toEqual([pinCode]);
+  expect(posted).toEqual([]);
+});

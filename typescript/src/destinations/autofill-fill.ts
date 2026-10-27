@@ -536,34 +536,70 @@ const leftOnly = (answered: Either.Either<CallAnswer, Error>) =>
 const pageSent = (answered: Either.Either<CallAnswer, Error>) =>
   Either.isRight(answered) && "pageSent" in answered.right;
 
+/** A call that found a typed field empty, or a code box holding other than one character. */
+const unchecked = (answered: Either.Either<CallAnswer, Error>) =>
+  Either.isRight(answered) && "checked" in answered.right;
+
+/** A step with a code field that the host submits (see `fillAutofillStep`). */
+const codeSentBySite = (step: AutofillStep<FillSlot>) =>
+  hostSubmits(step) && step.fields.some((field) => field.slot === "code");
+
 /**
  * After a submit call of a step with a submit found its fields gone from the document the host
  * typed in (`left`, a refusal): looks again for up to `sendMs`, the step's settle wait at most
  * `pageSendMs`, in case a new document replaces it, as a form that hides itself while it sends what
- * was typed, then loads the site's answer, does. Each look only reads the page, never clicks, so a
+ * was typed, then loads the site's answer, does; so after a code step's answer that may have raced
+ * such a load (`codeSentBySite`, `first`). Each look only reads the page and never clicks, so a
  * look that fails, as one does while the page navigates, is a look lost. A look that finds the page
- * sent what was typed reports that (`page`); one that finds the fields back, or the wait's end,
- * leaves the first refusal standing.
+ * sent what was typed reports that (`page`). A look that finds the fields back leaves the first
+ * answer standing, and so does the end of the wait. After a submit call's first answer but `left`,
+ * a box that still fails its check is the screen that answer found, so the host looks again.
  */
 const awaitNewDocument = (
   input: CallInput,
   progress: FillProgress,
   call: AutofillFillCall,
-  left: Either.Either<CallAnswer, Error>,
+  first: Either.Either<CallAnswer, Error>,
   sendMs: number,
   changes: { count: number },
 ) =>
   Effect.gen(function* () {
-    if (call.kind !== "submit") return left;
+    if (call.kind !== "submit") return first;
     const since = Date.now();
     const look: AutofillFillCall = { ...call, look: true };
+    const raced = !leftOnly(first);
     while (Date.now() - since < sendMs) {
       yield* Effect.sleep(submitPollMs);
       const answered = yield* fillCall(input, progress, changes)(look);
       if (pageSent(answered)) return answered;
-      if (Either.isRight(answered) && !leftOnly(answered)) return left;
+      if (Either.isRight(answered) && !leftOnly(answered) && !(raced && unchecked(answered)))
+        return first;
     }
-    return left;
+    return first;
+  });
+
+/** How long a step with fields gives its page to send what was typed itself (`pageSendMs`). */
+const sendWindow = (input: CallInput) =>
+  input.step.fields.length > 0 ? Math.min(input.settleMs ?? 5_000, pageSendMs) : 0;
+
+/**
+ * The step's submit call, judged against the controls as the host last judged them and guarded,
+ * with `boxes`, the step's code boxes, each of which must hold exactly one character before the
+ * click.
+ */
+const submitCall = (input: CallInput, progress: FillProgress, boxes: readonly number[]) =>
+  // A re-judge never changes a method, so the submission's method is the one judged now.
+  guardedSubmit(input.step, progress.judged, {
+    settleMs: input.settleMs ?? 5_000,
+    inspection: input.inspection.judgment,
+    // Once something was typed before inspection, only a secret inside an origin no page chose
+    // Is no leak: the page may have put one in any path or query.
+    exempt:
+      input.inspection.judgedBeforeTyping === undefined
+        ? null
+        : configuredOrigins(input.inspection),
+    codeBoxes: boxes,
+    alertsBefore: input.countNewAlerts === true,
   });
 
 /**
@@ -577,12 +613,13 @@ const awaitNewDocument = (
  * the host looks again, at least once after it, even past the wait. When a later look finds the
  * page sent what was typed, the fill reports that; otherwise the first failure stands. On a step
  * with a submit whose fields are gone from the document the host typed in, the host looks again
- * without clicking (`awaitNewDocument`).
+ * without clicking (`awaitNewDocument`), as on a code step whose call raced its page
+ * (`codeSentBySite`).
  */
 const submitWhenEnabled = (input: CallInput, progress: FillProgress, call: AutofillFillCall) =>
   Effect.gen(function* () {
     const started = Date.now();
-    const sendMs = input.step.fields.length > 0 ? Math.min(input.settleMs ?? 5_000, pageSendMs) : 0;
+    const sendMs = sendWindow(input);
     const readsOnly = !hostSubmits(input.step) && sendMs > 0;
     let unsentSince: number | undefined;
     let lost: Either.Either<CallAnswer, Error> | undefined;
@@ -590,7 +627,9 @@ const submitWhenEnabled = (input: CallInput, progress: FillProgress, call: Autof
     const changes = { count: 0 };
     for (;;) {
       const answered = yield* fillCall(input, progress, changes)(call);
-      if (leftOnly(answered) && sendMs > 0)
+      const raced =
+        codeSentBySite(input.step) && (Either.isLeft(answered) || unchecked(answered));
+      if ((leftOnly(answered) || raced) && sendMs > 0)
         return yield* awaitNewDocument(input, progress, call, answered, sendMs, changes);
       const failed = readsOnly && Either.isLeft(answered);
       const unsent = unclicked(answered, "none") || failed;
@@ -701,12 +740,28 @@ const afterFieldCall = (
           input.step.fields[index]?.slot === "phone" ? { phone: true } : undefined,
         ),
       );
-      if (typing._tag === "Left")
-        return failedCall(progress, typing.left, {
+      if (typing._tag === "Left") {
+        const lost = failedCall(progress, typing.left, {
           held: input.values,
           mayMutate: true,
           typing: true,
         });
+        if (index < input.step.fields.length - 1 || !codeSentBySite(input.step)) return lost;
+        // The page may have sent the code on this last digit (`codeSentBySite`).
+        progress.typedIn = answer.document;
+        const looked = yield* awaitNewDocument(
+          input,
+          progress,
+          submitCall(input, progress, []),
+          Either.left(typing.left),
+          sendWindow(input),
+          { count: 0 },
+        );
+        if (Either.isLeft(looked) || !("pageSent" in looked.right)) return lost;
+        progress.typed = true;
+        progress.statuses.push("filled");
+        return filledReport(input.step, progress, "page", looked.right.url);
+      }
       if (typing.right === "inserted") {
         progress.typed = true;
         progress.typedIn = answer.document;
@@ -756,7 +811,11 @@ const afterFieldCall = (
  * with it, before the click or within `pageSendMs` of a look that found them gone: the page sent
  * the form itself (`page`, `screenGone`, `awaitNewDocument`), and the host clicks nothing. A form
  * that locks, redraws itself or changes its address with pushState has sent nothing, and the host
- * waits on it or refuses as before.
+ * waits on it or refuses as before. A code step gets the same looks once every box is typed, when
+ * its submit call finds a box empty or fails, or the last box's typing loses its answer, as when
+ * its page sends the code itself on the last digit and loads a new document while the host checks
+ * the boxes (`codeSentBySite`). Its fields gone with a new document within `pageSendMs` is `page`,
+ * with every box filled; else the report is as it would have been.
  * Guardian's refusals still come first: a control that moved off the site or changed how it
  * submits refuses the submit as before.
  * A step that names `dismiss` clicks that covering notice's own control first, when the page shows
@@ -926,23 +985,7 @@ const submitStep = (
 ) =>
   Effect.gen(function* () {
     const { step } = input;
-    // A re-judge never changes a method, so the submission's method is the one judged now.
-    const clicked = yield* submitWhenEnabled(
-      input,
-      progress,
-      guardedSubmit(step, progress.judged, {
-        settleMs: input.settleMs ?? 5_000,
-        inspection: input.inspection.judgment,
-        // Once something was typed before inspection, only a secret inside an origin no page chose
-        // Is no leak: the page may have put one in any path or query.
-        exempt:
-          input.inspection.judgedBeforeTyping === undefined
-            ? null
-            : configuredOrigins(input.inspection),
-        codeBoxes: boxes,
-        alertsBefore: input.countNewAlerts === true,
-      }),
-    );
+    const clicked = yield* submitWhenEnabled(input, progress, submitCall(input, progress, boxes));
     if (clicked._tag === "Left")
       return failedCall(progress, clicked.left, { mayMutate: hostSubmits(step) });
     const answer = clicked.right;
