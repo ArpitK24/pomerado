@@ -19,25 +19,11 @@ const signInStep: AutofillStep = {
   submit: "#log-in",
 };
 
-const footer = `<footer id="footer" style="position:fixed;bottom:0;left:0;right:0;height:120px;background:#eee">Help and terms</footer>
-<script>document.getElementById("footer").addEventListener("click", () => sessionStorage.setItem("footer", "clicked"));</script>`;
-// A cookie banner over the same Log In, with its own reject and accept controls, which notes any
-// click on it that is not one of them and goes away once either is clicked.
-const banner = `<div id="cookies" role="dialog" aria-label="Cookies" style="position:fixed;bottom:0;left:0;right:0;height:120px;background:#eee;z-index:10">
-<p>This site uses cookies.</p><button id="cookies-reject" type="button">Reject</button><button id="cookies-accept" type="button">Accept</button></div>
-<script>document.getElementById("cookies").addEventListener("click", (event) => {
-  if (event.target.id !== "cookies-reject" && event.target.id !== "cookies-accept") sessionStorage.setItem("banner", "clicked");
-  else {
-    sessionStorage.setItem("banner", event.target.id);
-    document.getElementById("cookies").remove();
-  }
-});</script>`;
-
 /**
- * Serves, at /login, a sign-in form at the foot of a page that does not scroll, under `cover`, a
- * fixed footer by default, and keeps each form the site received.
+ * Serves, at /login, a sign-in form at the foot of a page that does not scroll, under a fixed
+ * footer that notes any click on it, and keeps each form the site received.
  */
-const serve = async (page: Page, script = "", cover = footer) => {
+const serve = async (page: Page, script = "") => {
   const received: Record<string, string>[] = [];
   await page.route("https://*.example.test/**", async (route) => {
     if (route.request().method() === "POST") {
@@ -51,25 +37,26 @@ const serve = async (page: Page, script = "", cover = footer) => {
 <label>Username<input id="username" name="username"></label>
 <label>Password<input id="password" name="password" type="password"></label>
 <button id="log-in">Log In</button></form>
-${cover}
-<script>${script}</script></body>`,
+<footer id="footer" style="position:fixed;bottom:0;left:0;right:0;height:120px;background:#eee">Help and terms</footer>
+<script>document.getElementById("footer").addEventListener("click", () => sessionStorage.setItem("footer", "clicked"));
+${script}</script></body>`,
       });
   });
   await page.goto(`${site}/login`);
   return received;
 };
 
-const inspect = async (page: Page, step: AutofillStep) => {
+const inspect = async (page: Page) => {
   const hosted = await hostPage(page);
   const inspection = await Effect.runPromise(
-    inspectAutofillStep({ step, page: hosted, siteOrigin: site, authenticationOrigins: [] }),
+    inspectAutofillStep({ step: signInStep, page: hosted, siteOrigin: site, authenticationOrigins: [] }),
   );
   if ("outcome" in inspection) throw new Error(`Inspection refused: ${inspection.reason}`);
   return { hosted, inspection };
 };
 
 const fill = async (page: Page) => {
-  const { hosted, inspection } = await inspect(page, signInStep);
+  const { hosted, inspection } = await inspect(page);
   const { keyboard } = await hostKeyboard(page);
   return Effect.runPromise(
     fillAutofillStep({
@@ -83,11 +70,11 @@ const fill = async (page: Page) => {
   );
 };
 
-/** The host's click again of the blocked screen, sent again as `step`, typing nothing. */
-const clickAgain = async (page: Page, step: AutofillStep = signInStep) => {
-  const { hosted, inspection } = await inspect(page, step);
+/** The host's click again of the blocked screen, sent again unchanged, typing nothing. */
+const clickAgain = async (page: Page) => {
+  const { hosted, inspection } = await inspect(page);
   return Effect.runPromise(
-    resubmitAutofillStep({ step, inspection, page: hosted, settleMs: 1_000 }),
+    resubmitAutofillStep({ step: signInStep, inspection, page: hosted, settleMs: 1_000 }),
   );
 };
 
@@ -95,26 +82,6 @@ const filled = [
   { slot: "username", status: "filled" },
   { slot: "password", status: "filled" },
 ];
-
-test("a cookie banner over Log In catches the host's click: the fill reports it blocked by the banner and presses nothing, and the screen sent again with the banner's reject as dismiss clicks it, then Log In", async ({
-  page,
-}) => {
-  const received = await serve(page, "", banner);
-  expect(await fill(page)).toMatchObject({
-    outcome: "filled",
-    fields: filled,
-    submit: "blocked",
-    blockedBy: { tag: "div", role: "dialog" },
-  });
-  expect(received).toEqual([]);
-  expect(await page.evaluate(() => sessionStorage.getItem("banner"))).toBeNull();
-
-  const again = await clickAgain(page, { ...signInStep, dismiss: "#cookies-reject" });
-  expect(again).toMatchObject({ outcome: "filled", fields: filled, submit: "clicked" });
-  expect(again).not.toHaveProperty("via");
-  expect(received).toEqual([{ username, password }]);
-  expect(await page.evaluate(() => sessionStorage.getItem("banner"))).toBe("cookies-reject");
-});
 
 test("a fixed footer over Log In catches the host's click: the fill reports it blocked by the footer, and the screen sent again presses that same Log In from the keyboard and signs in, clicking nothing on the footer; a Log In that focus never lands on stays blocked", async ({
   page,

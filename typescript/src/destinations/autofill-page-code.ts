@@ -141,11 +141,9 @@ return {
  *   with a submit key, presses that key in its last field, which stands as the submit), or presses
  *   Enter on the submit itself once focus landed on it, when another element caught a click the
  *   host may press past (`pressCovered`) or the step says to (`submitVia`), waits for the page to
- *   settle and reads its controls
- *   (`pageControlsCode`), with how many of
- *   their alerts did not show before the click (`newAlerts`) when it read them. A disabled submit it
- *   never clicks: it says so and does nothing, and the host calls again while the page may still
- *   enable it.
+ *   settle and reads its controls (`pageControlsCode`), with how many of their alerts did not show
+ *   before the click (`newAlerts`) when it read them. A disabled submit it never clicks: it says so
+ *   and does nothing, and the host calls again while the page may still enable it.
  */
 export type AutofillFillCall =
   | {
