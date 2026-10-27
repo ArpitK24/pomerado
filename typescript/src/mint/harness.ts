@@ -326,6 +326,16 @@ const callerVisibleRequest = <R extends typeof AgentRequest.Type>(
   ...(request.notice === undefined ? {} : { notice: redact(request.notice) }),
   questions: request.questions.map((question) => callerVisibleQuestion(question, redact)),
 });
+/**
+ * The agent's confirm questions that ask the owner to confirm a step an execution review refused
+ * (`confirmsReview`), each with that review's id.
+ */
+const confirmsReviewMarks = (request: typeof AgentRequest.Type) =>
+  request.questions.flatMap((question) =>
+    question.type === "confirm" && question.confirmsReview !== undefined
+      ? [{ questionId: question.id, reviewId: question.confirmsReview }]
+      : [],
+  );
 /** The ids of the agent's confirm questions that ask whether to end the build (`endsBuild`). */
 const endsBuildIds = (request: typeof AgentRequest.Type): ReadonlySet<string> =>
   new Set(
@@ -6510,14 +6520,29 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                     "Remove allowOther and allowNote from every question and ask again: the host lets the caller answer every choice and multi_choice in their own words.",
                 });
               const decoded = yield* decode(AgentRequest, input);
-              // The mark stays the host's own: Guardian and the caller read a plain confirm.
+              // The marks stay the host's own: the caller reads a plain confirm, and Guardian is
+              // told which held step a confirm question asks about.
               const endsBuild = endsBuildIds(decoded);
+              const confirms = confirmsReviewMarks(decoded);
+              const unheld = confirms.filter(
+                ({ reviewId }) =>
+                  !ledgerDenials.some(
+                    (denial) => denial.review === "execution" && denial.reviewId === reviewId,
+                  ),
+              );
+              if (unheld.length > 0 && !ledgerPartial)
+                return JSON.stringify({
+                  status: "question_refused",
+                  reason: "confirms_unknown_review",
+                  userInputRequired: false,
+                  instruction: `confirmsReview names the reviewId of an execution step Guardian refused in this build, and ${unheld.map(({ reviewId }) => reviewId).join(", ")} is none. Set it to the reviewId from that step's review_rejected result, or leave it out, and ask again.`,
+                });
               const proposed = callerVisibleRequest(
                 {
                   ...decoded,
                   questions: decoded.questions.map((question) => {
                     if (question.type !== "confirm") return question;
-                    const { endsBuild: _mark, ...asked } = question;
+                    const { endsBuild: _mark, confirmsReview: _confirms, ...asked } = question;
                     return asked;
                   }),
                 },
@@ -6559,6 +6584,7 @@ export const runMint = (input: unknown): Effect.Effect<MintOutcome, MintFailure,
                   requestId,
                   ...(yield* publicationRefusals),
                   ...decidedBuildEffect(),
+                  ...(confirms.length === 0 ? {} : { confirms }),
                 });
                 yield* reviewCompleted;
                 reviewId = review.reviewId;

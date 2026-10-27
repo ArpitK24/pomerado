@@ -16,6 +16,8 @@ import type {
 import type { AnsweredQuestion, PendingQuestion } from "./question.js";
 import { TaskUpdateDecision } from "./task-update.js";
 import { completeSource, wholeSource } from "./source.js";
+import { makeOwnerConfirmations, stepIdentity } from "./owner-confirmation.js";
+import type { HeldStepQuestion, OwnerConfirmedStep } from "./owner-confirmation.js";
 import type { PendingTaskUpdate, ReviewedTaskUpdate } from "./task-update.js";
 import {
   failureDetail,
@@ -566,6 +568,18 @@ export interface ReviewSources {
   readonly unchangedSources?: readonly string[];
   /** A later publication round's change since the mint's prior round, and that round's decision. */
   readonly publicationDelta?: PublicationDelta;
+  /**
+   * An execution review only: the owner's yes that confirms exactly this step, which an earlier
+   * execution review held for the owner's confirmation. Guardian found it itself: the same
+   * entrypoint, purpose, target, input and file text as the held step, and the host's record of
+   * the owner's answer to the confirm question a question review allowed.
+   */
+  readonly ownerConfirmedStep?: OwnerConfirmedStep;
+  /**
+   * A question review only: the request's confirm questions that ask the owner to confirm a step
+   * an execution review in this job held for that confirmation, with that review's rationale.
+   */
+  readonly heldStepQuestions?: readonly HeldStepQuestion[];
 }
 
 export interface ReviewTurn {
@@ -873,13 +887,15 @@ const knownRefusal = (raw: unknown): unknown => {
  * The ground an execution deny or escalate rests on (`refusalGround`) when the host's own record
  * settles it the other way: retry permission when trusted_execution_context.repeatableRead is
  * true, since the host itself refuses before review any run it does not permit, committing a
- * listed write again for a step the review labels a read, which changes nothing, or missing write
+ * listed write again for a step the review labels a read, which changes nothing, missing write
  * authority for a step whose own authority grants the write (`writeAuthority`), such as an act step
- * reviewed right after a read-only explore. Undefined for any other decision.
+ * reviewed right after a read-only explore, or missing confirmation for the very step the owner
+ * confirmed (`confirmed`). Undefined for any other decision.
  */
 const settledGroundOf = (
   pending: PendingExecution,
   raw: unknown,
+  confirmed: OwnerConfirmedStep | undefined,
 ): GuardianRefusalGround | undefined => {
   if (reviewKindOf(pending) !== "execution" || typeof raw !== "object" || raw === null)
     return undefined;
@@ -889,6 +905,7 @@ const settledGroundOf = (
   if (ground === "retry_permission" && pending.mintContext?.repeatableRead === true) return ground;
   if (ground === "committed_write" && Reflect.get(raw, "action") === "read") return ground;
   if (ground === "write_authority" && pending.writeAuthority === true) return ground;
+  if (ground === "owner_confirmation" && confirmed !== undefined) return ground;
   return undefined;
 };
 
@@ -900,6 +917,8 @@ const settledGroundCorrection: Record<GuardianRefusalGround, string> = {
     "The host did not accept this refusal as given: it rests on committing a listed write again, yet this review labels the step a read. If the submitted code changes the site, label it write and keep the refusal. If it changes nothing, it commits nothing again: reading back a write's result, the record it created or changed included, on any page of the authorized site, and the request's other remaining steps toward the same task stay allowed, so judge the step under the policy's other rules and decide again without the earlier write as a ground.",
   write_authority:
     "The host did not accept this refusal: it rests on this step having no write authority, and the host's record gives this step write authority, as its own trusted_authority.allowedEffects say. An earlier review's allowed effects are not this step's. Judge this step's own source and effects under the policy and decide again, without missing write authority as a ground.",
+  owner_confirmation:
+    "The host did not accept this refusal: it rests on this step needing the owner's confirmation, and trusted_authority.ownerConfirmedStep shows the owner already confirmed exactly this step, the one an earlier review held for that confirmation, with the same code and input. That answer authorizes this step, and it needs no task update. Decide again without missing confirmation as a ground. Refuse it still, with refusal final, only when the step weakens security or safety in a way no answer authorizes, and say which.",
 };
 
 /**
@@ -913,9 +932,11 @@ const afterGroundPushback = (
   pending: PendingExecution,
   pushback: { readonly ground: GuardianRefusalGround; readonly refused: object },
   raw: unknown,
+  confirmed: OwnerConfirmedStep | undefined,
 ): unknown => {
   if (typeof raw !== "object" || raw === null) return raw;
-  if (settledGroundOf(pending, raw) !== undefined) return { ...raw, refusal: "correctable" };
+  if (settledGroundOf(pending, raw, confirmed) !== undefined)
+    return { ...raw, refusal: "correctable" };
   return pushback.ground === "committed_write" &&
     Reflect.get(raw, "outcome") === "allow" &&
     Reflect.get(raw, "action") !== "read"
@@ -1017,6 +1038,8 @@ export const makeGuardian = (
         Effect.asVoid,
       ));
   const session = continuity === undefined ? undefined : makeGuardianSession(continuity);
+  /** The steps this job's reviews held for the owner's confirmation, and the owner's answers. */
+  const confirmations = makeOwnerConfirmations();
   /** Decode failures whose review sent the decode follow-up: never reviewed again. */
   const correctedDecodes = new WeakSet<ReviewFailure>();
   /** The latest publication round of a Guardian without a session, which keeps it here instead. */
@@ -1454,6 +1477,23 @@ export const makeGuardian = (
           };
         }
         if (delta !== undefined) sources = { ...sources, publicationDelta: delta };
+        // The owner's yes to a confirm question binds only to the step its review held, and only
+        // when this step is that step: the same code and input.
+        const confirmedStep =
+          kind === "execution" && confirmations.pending(pending)
+            ? yield* stepIdentity(pending, readSource).pipe(
+                Effect.map((step) =>
+                  step === undefined ? undefined : confirmations.confirmedFor(pending, step),
+                ),
+              )
+            : undefined;
+        if (confirmedStep !== undefined)
+          sources = { ...sources, ownerConfirmedStep: confirmedStep };
+        const heldQuestions =
+          kind === "question" && pending.questionCandidate !== undefined
+            ? confirmations.heldStepQuestions(pending.questionCandidate)
+            : [];
+        if (heldQuestions.length > 0) sources = { ...sources, heldStepQuestions: heldQuestions };
         const kindName = pending.hostReview?.kind ?? kind;
         const outcomes = reviewOutcomesOf(pending);
         /** A decision whose outcome this review's kind does not return. */
@@ -1548,7 +1588,9 @@ export const makeGuardian = (
             }
             // A refusal on a ground the host's own record settles goes back once, naming it.
             const settled =
-              groundPushback === undefined ? settledGroundOf(pending, output) : undefined;
+              groundPushback === undefined
+                ? settledGroundOf(pending, output, confirmedStep)
+                : undefined;
             if (settled !== undefined) {
               groundPushback = { ground: settled, refused: output as object };
               followUpRounds++;
@@ -1574,7 +1616,9 @@ export const makeGuardian = (
           | { readonly ground: GuardianRefusalGround; readonly refused: object }
           | undefined;
         const raw =
-          pushback === undefined ? output : afterGroundPushback(pending, pushback, output);
+          pushback === undefined
+            ? output
+            : afterGroundPushback(pending, pushback, output, confirmedStep);
         if (outcomeRefused(raw)) {
           // A private kind's failure names no outcome, as its decode failures name no value.
           const refused = privateKind ? undefined : refusedOutcome(raw);
@@ -1595,6 +1639,27 @@ export const makeGuardian = (
         );
         if (requireEntrypoint && decision.outcome === "allow" && entrypointReadAt !== epoch())
           return yield* new ReviewFailure({ code: "EntrypointNotRead" });
+        // A refusal that asks for the owner's confirmation holds this step for it, unless the
+        // owner already confirmed it; an allowed confirm question that names it records the ask.
+        const rationale: unknown = Reflect.get(decision, "rationale");
+        if (
+          kind === "execution" &&
+          confirmedStep === undefined &&
+          (decision.outcome === "deny" || decision.outcome === "escalate") &&
+          typeof raw === "object" &&
+          raw !== null &&
+          Reflect.get(raw, "refusalGround") === "owner_confirmation" &&
+          typeof rationale === "string"
+        ) {
+          const step = yield* stepIdentity(pending, readSource);
+          if (step !== undefined) confirmations.hold(reviewId, step, rationale);
+        }
+        if (
+          decision.outcome === "allow_business" &&
+          pending.questionCandidate !== undefined &&
+          heldQuestions.length > 0
+        )
+          confirmations.asked(pending.questionCandidate, heldQuestions);
         yield* emit(
           "guardian.completed",
           privateKind

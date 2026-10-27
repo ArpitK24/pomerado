@@ -73,6 +73,10 @@ export const guardianReviewInput = (
       ),
       ownerNamedOrigins: absentWhenEmpty(ownerNamedOrigins(turn.pending)),
       taskUpdates: absentWhenEmpty(turn.pending.taskUpdates ?? []),
+      // Guardian's own finding that the owner confirmed exactly this step.
+      ...(turn.sources?.ownerConfirmedStep === undefined
+        ? {}
+        : { ownerConfirmedStep: turn.sources.ownerConfirmedStep }),
       // The exact frame origins a host card-fill step may type a card answer into.
       ...(reviewKindOf(turn.pending) === "execution" ? { paymentFrameOrigins } : {}),
     },
@@ -105,6 +109,10 @@ export const guardianReviewInput = (
             ...(turn.pending.questionCandidate.buildEffect === undefined
               ? {}
               : { buildEffect: turn.pending.questionCandidate.buildEffect }),
+            // The confirm questions that ask the owner to confirm a step a review held.
+            ...(turn.sources?.heldStepQuestions === undefined
+              ? {}
+              : { confirmsHeldSteps: turn.sources.heldStepQuestions }),
           },
         }),
     ...(turn.pending.updateCandidate === undefined

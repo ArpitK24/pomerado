@@ -3,8 +3,8 @@
 // that returns an outcome its kind refuses is retried with backoff as an outage, from the same
 // input, for as long as the retry budget lasts, instead of being told once which outcomes count;
 // a host kind's allow carries a label its policy gives only to a deny, and the host acts on it;
-// a write build's task update review reads its empty allowedEffects as a read-only build; a
-// caller's confirmed answer can't overturn a Guardian decision that held a step to their request.
+// a write build's task update review reads its empty allowedEffects as a read-only build; the
+// reviews disagree about what an owner's answer authorizes.
 import { OpenAIProvider, setDefaultModelProvider, Usage } from "@openai/agents";
 import type { ModelRequest, ModelResponse } from "@openai/agents";
 import { Effect } from "effect";
@@ -14,6 +14,8 @@ import {
   guardianExecutionPolicy,
   nativeExecutionEnvironment,
 } from "../../src/guardian/execution-policy.js";
+import { answerSecurityExceptions } from "../../src/guardian/answer-exceptions.js";
+import { guardianPublicationPolicy } from "../../src/guardian/publication.js";
 import { guardianActions } from "../../src/guardian/review-contracts.js";
 import { guardianOutcomes } from "../../src/guardian/review-layout.js";
 import { makeGuardian, ReviewFailure as ReviewFailureClass } from "../../src/guardian/review.js";
@@ -378,20 +380,22 @@ it("tells a write build's task update review that its empty allowedEffects says 
   );
 });
 
-// A caller's confirmed answer can overturn a Guardian decision that held a step to their own
-// request, never one made for safety or a scope limit. The task update review and every later
-// execution review read the same exception.
-it("lets a caller's confirmed answer overturn only a decision that held a step to their request", async () => {
-  const exception =
-    "or overturns a Guardian decision, except that the caller's confirmed answer can overturn one that held a step to their own request, such as a time, a value or a search setting. A caller's answer never overturns a decision made for safety or for a Pomerado scope limit.";
-  const requests = scripted([decision("allow")]);
-  await Effect.runPromise(guardianWith().reviewTaskUpdate(pending, update, readSource));
-  expect(reviewRequest(requests[0]).trusted_review.policy).toContain(
-    `allows repeating a write that may have committed (trusted_execution_context.executions lists what already ran), ${exception}`,
-  );
-  expect(guardianExecutionPolicy(nativeExecutionEnvironment)).toContain(
-    `An update never removes the requested action itself, allows repeating a write that may have committed, ${exception}`,
-  );
+// The reviews disagreed about an owner's answer: a question review let the agent ask the owner to
+// confirm a step, the next execution review refused the confirmed step, and the task update review
+// refused the update that cited the answer. Every review that weighs an answer now names the same
+// actions no answer authorizes.
+it("names the same actions no answer authorizes in every review that weighs an owner's answer", async () => {
+  const requests = scripted([decision("allow_business"), decision("allow")]);
+  const g = guardianWith();
+  await Effect.runPromise(g.reviewQuestion(pending, question, readSource));
+  await Effect.runPromise(g.reviewTaskUpdate(pending, update, readSource));
+  for (const policy of [
+    reviewRequest(requests[0]).trusted_review.policy,
+    reviewRequest(requests[1]).trusted_review.policy,
+    guardianExecutionPolicy(nativeExecutionEnvironment),
+    guardianPublicationPolicy,
+  ])
+    expect(policy).toContain(answerSecurityExceptions);
 });
 
 const labelled = (outcome: string, label: string): ModelResponse["output"] => [
