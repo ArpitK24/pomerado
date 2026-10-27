@@ -22,7 +22,7 @@ const slot = "{{ tenant_policy_config }}";
 // sha256 of upstream-policy.md before the notice was added. A deliberate policy edit updates it.
 const policyBodySha256 = "bf072035fd6233158822b23d95a8037a8fc85324c5d57254dbbbbfc30c2fd352";
 // sha256 of the local host's execution policy. A deliberate policy edit updates it.
-const nativePolicySha256 = "ee7a5cfa384c7b9637c0eb7194aada37e1842530934e07c6ccbb8c89e0f15a04";
+const nativePolicySha256 = "0bd5815a4be7d73735267e4c903e819e5084c465d95dc656a53bd9f19052965e";
 const sha256 = (text: string) => createHash("sha256").update(text, "utf8").digest("hex");
 
 const shippedPolicy = readFileSync(
@@ -125,7 +125,7 @@ const slots = [
 const capturedDataVendor =
   "The site's own third-party data vendor, such as a hosted search service, is the one exception to the off-site rule's caller-data escalation: a read-only https request to another registrable domain may carry the caller's input when it matches a call the screened captures show the authorized site's own page script making for this data, with the same origin and endpoint, and it sends only the caller's input and the values the page itself sends there, never a {{secret.<id>}} handle, a credential, or account data the page does not send there. That origin does not become the site: navigation, sign-in and writes there stay off-site, and the handle, credential and publication egress rules apply to it unchanged.";
 // sha256 of the execution policy a host with screened captures renders with the captured words.
-const capturedPolicySha256 = "959ceb48b558949b6e81f8e85f84984522f6256c7a96905000732a888ea01e28";
+const capturedPolicySha256 = "802588ade7f98d4be572fa4e2d30da5b9b09bcfd4d7604d7575f9b9e9ff766bf";
 
 describe("Guardian execution environment", () => {
   it("puts each of the host's texts in its place in the execution policy", () => {
