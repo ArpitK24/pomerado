@@ -9,8 +9,8 @@ import type { AutofillHooks } from "./autofill-state.js";
 
 // A code screen the recipe never recorded: any site may ask for a code after the password, with or
 // without two-factor when the tool was built. The replay looks once for one visible code field and
-// its form's submit (`unrecordedCode` in autofill-replay.ts), only on a sign-in origin
-// (`onSignInOrigin`).
+// its form's submit, or the field alone when it has none (`unrecordedCode` in autofill-replay.ts),
+// only on a sign-in origin (`onSignInOrigin`).
 
 /** Words in a field's name or id that alone name a one-time code. */
 const oneTimeCodeWords = ["otp", "totp", "2fa", "mfa"];
@@ -132,19 +132,44 @@ export const namesWholeOtherWord = (
   );
 
 /**
+ * `step`'s inspection, where a field the selector matched that holds `wholeOtherWords` is not one,
+ * so it reads as none found.
+ */
+const inspectCodeStep = <E>(hooks: Pick<AutofillHooks<E>, "inspect">, step: AutofillStep) =>
+  Effect.map(hooks.inspect(step), (inspected): AutofillRefusal | AutofillInspection => {
+    const field = "outcome" in inspected ? undefined : inspected.screen.fields[0];
+    return field !== undefined && namesWholeOtherWord(field)
+      ? { outcome: "refused", reason: "not_found" }
+      : inspected;
+  });
+
+/**
  * Looks for the code field and its form's submit (`unrecordedCodeStep`): a field the selector
  * matched that holds `wholeOtherWords` is not one, so it reads as none found.
  */
 export const findCodeField = <E>(hooks: Pick<AutofillHooks<E>, "inspect">) =>
-  Effect.map(
-    hooks.inspect(unrecordedCodeStep),
-    (inspected): AutofillRefusal | AutofillInspection => {
-      const field = "outcome" in inspected ? undefined : inspected.screen.fields[0];
-      return field !== undefined && namesWholeOtherWord(field)
-        ? { outcome: "refused", reason: "not_found" }
-        : inspected;
-    },
-  );
+  inspectCodeStep(hooks, unrecordedCodeStep);
+
+/**
+ * The same code field alone, for a screen that has it in no form with a submit, as a code field
+ * that sends itself once it holds the whole code does: the step has no submit, so the fill types
+ * the code, clicks nothing and counts the page's own send (`page`).
+ */
+const selfSendingCodeStep: AutofillStep = { fields: unrecordedCodeStep.fields };
+
+/**
+ * Looks for a code screen the recipe never recorded: the code field and its form's submit
+ * (`findCodeField`), else, when the field shows with no such submit, the field alone
+ * (`selfSendingCodeStep`), matched by the same selector and the same `wholeOtherWords` rule.
+ */
+export const findCodeScreen = <E>(hooks: Pick<AutofillHooks<E>, "inspect">) =>
+  Effect.gen(function* () {
+    const withSubmit = yield* findCodeField(hooks);
+    if (!("outcome" in withSubmit)) return { step: unrecordedCodeStep, inspection: withSubmit };
+    if (withSubmit.reason !== "not_found" || withSubmit.target !== "submit") return withSubmit;
+    const alone = yield* inspectCodeStep(hooks, selfSendingCodeStep);
+    return "outcome" in alone ? alone : { step: selfSendingCodeStep, inspection: alone };
+  });
 
 /**
  * Whether the inspected code screen is on a sign-in origin: a recorded screen's (`recorded`), or
